@@ -1,6 +1,6 @@
 ---
 created: 2026-04-20, 3:48 PM
-updated: 2026-04-29
+updated: 2026-05-06
 tags:
 ---
 # NFC Movie Box for Von — Project Plan
@@ -353,7 +353,7 @@ This is the webhook the NFC trigger will eventually call. It has to handle the f
 
    ```yaml
    alias: Play Super Mario Bros Movie webhook
-   description: Cold-start — wake Apple TV, launch Plex, play movie
+   description: Cold-start — wake Apple TV, launch Plex, play The Super Mario Bros. Movie
    triggers:
      - webhook_id: play_super_mario_movie
        allowed_methods:
@@ -383,18 +383,57 @@ This is the webhook the NFC trigger will eventually call. It has to handle the f
          source: Plex
        action: media_player.select_source
 
-     # 5. Settle — Plex client entity registers in HA before its session is fully usable
-     - delay: "00:00:05"
+     # 5. Wait for the Plex client entity to come up. Note: NO continue_on_timeout —
+     #     if the entity never reaches a usable state, fail loudly so the logbook
+     #     surfaces the real problem (often a stale Plex client UUID, see lesson #10).
+     - wait_template: >-
+         {{ states('media_player.plex_plex_for_apple_tv_apple_tv') in ['idle',
+         'paused', 'playing'] }}
+       timeout: "00:00:30"
 
-     # 6. Play the movie via the Plex client entity (rating key, not title)
+     # 6. Settle so Plex finishes foregrounding
+     - delay: "00:00:08"
+
+     # 7. Warm up the Plex Companion session — sending any command forces the
+     #     control channel to re-establish before play_media. Without this, a stale
+     #     session will silently swallow the play_media call (see lesson #6).
      - target:
          entity_id: media_player.plex_plex_for_apple_tv_apple_tv
-       data:
-         media_content_id: '190'
-         media_content_type: movie
-       action: media_player.play_media
+       action: media_player.media_play
+       continue_on_error: true
+     - delay: "00:00:02"
+
+     # 8. Play the movie, with event-driven retry — wait_template confirms playback
+     #     actually started before exiting; only retry on real timeout (see lesson #9).
+     - repeat:
+         sequence:
+           - target:
+               entity_id: media_player.plex_plex_for_apple_tv_apple_tv
+             data:
+               media_content_id: "190"   # rating key, not title
+               media_content_type: movie
+             action: media_player.play_media
+           - wait_template: >-
+               {{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing'
+               and state_attr('media_player.plex_plex_for_apple_tv_apple_tv',
+               'media_content_id') | string == '190' }}
+             timeout: "00:00:15"
+             continue_on_timeout: true
+           - if:
+               - condition: template
+                 value_template: >-
+                   {{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing'
+                   and state_attr('media_player.plex_plex_for_apple_tv_apple_tv',
+                   'media_content_id') | string == '190' }}
+             then:
+               - stop: Movie is playing
+         until:
+           - condition: template
+             value_template: "{{ repeat.index >= 3 }}"
    mode: single
    ```
+
+   The working copy of this YAML lives at `test/play_mario.yaml` in the repo and is the canonical source. If you tune timing or fix a bug, update there first; this inline version is for narrative reference and may lag behind.
 
 3. Save, sleep the Apple TV, wait 10s, then from your laptop:
    ```bash
@@ -402,12 +441,14 @@ This is the webhook the NFC trigger will eventually call. It has to handle the f
    ```
 4. Watch: TV on → soundbar on → Apple TV wakes → Plex opens → movie plays. Single command from full cold.
 
-**Why this YAML works where the original "launch_app" approach didn't:**
+**Why this YAML works:**
 - `media_player.turn_on` (rather than `remote.send_command turn_on`) uses the Companion protocol from Step 2 — same mechanism the physical remote uses; TV and soundbar follow via CEC.
 - `media_player.select_source: Plex` is cleaner than `remote.send_command launch_app` for opening Plex from cold — the source list comes from pyatv's discovery and doesn't depend on bundle-ID strings.
-- The 5-second settle delay in step 5 is the difference between "Plex is open" and "Plex's playback session is actually ready to receive a command". Without it, `play_media` lands in dead air.
+- **The Companion warm-up poke (step 7) is the most important reliability fix.** Plex Companion sessions go stale after periods of inactivity; the HA entity keeps reporting `idle` even when the underlying control channel is dead. Sending *any* command (here, `media_player.media_play` with `continue_on_error: true`) forces the session to re-establish before `play_media` lands. Without this, the automation behaves "sometimes works, sometimes the home screen sits there" — see lesson #6.
+- **Event-driven retry (step 8), not time-driven.** Each `play_media` call is followed by a `wait_template` that watches for `state == 'playing'` for up to 15s. We only retry if the wait truly times out, meaning the previous call actually didn't take. A naive fixed-delay retry caused duplicate `play_media` calls when the state hadn't propagated yet, which Plex interpreted as "restart the movie" — see lesson #9.
+- **No `continue_on_timeout: true`** on the post-`select_source` wait_template. Failures fail loudly into the HA logbook instead of silently moving on. See lesson #8.
 
-**Cold-start gotcha — Apple ID picker.** If the Apple TV has multiple user accounts, tvOS shows a "Who's watching?" picker before any app gets foreground. Plex launches behind it; `play_media` fires into nothing. **Fix:** Settings → Users and Accounts → switch to a single user (or set a default). Right call for a kid's movie box anyway — Von shouldn't be picking accounts.
+**Cold-start gotcha — Apple ID picker.** If the Apple TV has multiple user accounts, tvOS shows a "Who's watching?" picker before any app gets foreground. Plex launches behind it; `play_media` fires into nothing. **Fix:** Settings → Users and Accounts → switch to a single user (or set a default). Right call for a kid's movie box anyway — Von shouldn't be picking accounts. ✅ Resolved in this house — picker is disabled.
 
 **✅ Checkpoint:** Single `curl` plays the movie from a fully asleep Apple TV.
 
@@ -426,11 +467,13 @@ If you ever want it for manual testing in the meantime, it's a one-action automa
 
 - **`media_player.turn_on` does nothing from HA:** Companion pairing didn't complete. Settings → Devices & services → Apple TV integration → Reconfigure → step through pairing again. Companion is a *separate* pairing flow from AirPlay; both must complete.
 - **Apple TV wakes but TV/soundbar stay off:** HDMI-CEC is off somewhere in the chain. Test the physical Siri Remote first — if that also fails, fix CEC at the device level before touching HA.
-- **Apple TV stops at "Who's watching?" picker:** multiple users configured on Apple TV. Settings → Users and Accounts → switch to a single user.
+- **Apple TV stops at "Who's watching?" picker:** multiple users configured on Apple TV. Settings → Users and Accounts → switch to a single user. *(Resolved in this house — picker is disabled. Leaving entry in case it ever re-appears after a tvOS update.)*
 - **Apple TV sleeps too deeply during testing:** Settings → General → Sleep After → set a long interval (or Never) while debugging so sleep depth doesn't confound other failures.
 - **Plex client entity missing from HA:** open Plex on the Apple TV once, then reload the Plex integration (Devices & services → Plex → ⋯ → Reload). The entity only registers while Plex is running.
 - **Plex opens but `play_media` does nothing:** Plex client entity name may have shifted, or the rating key doesn't exist. Developer Tools → States, search "plex", confirm the entity ID. Verify the rating key by opening the movie's detail page in Plex web — the URL contains the key.
-- **First play call sometimes fails, second works:** Plex client reports ready slightly before its playback session is. The 5s settle delay covers most of this; if it's still flaky in the field, wrap step 6 in a `repeat: ... until:` block with up to 3 retries (worth doing in the production Phase 3 automation for reliability under Von's hands).
+- **Plex opens but movie sits at home screen, especially after Plex has been idle for hours:** Plex Companion session went stale. The warm-up poke in step 7 of the working YAML is the fix. See lesson #6.
+- **Movie starts playing then jumps back to the beginning a few seconds later:** retry loop double-fired `play_media` because state hadn't propagated within the fixed delay. The event-driven retry in step 8 of the working YAML is the fix. See lesson #9.
+- **Automation worked for weeks then suddenly stopped, even though Plex looks fine:** Plex Media Server registered a new client UUID (often after a Plex app update on the Apple TV) and the YAML is now pointing at the old, ghosted entity. Check Devices & services → Plex Media Server for two "Plex (Plex for Apple TV ...)" devices; one will be greyed-out/disabled with `restored: true` state. See lesson #10.
 - **Webhook returns 200 but nothing happens:** Developer Tools → Logbook (or Settings → System → Logs) shows the automation run and which action failed. Usually a misnamed entity.
 
 #### Phase 1 done when
@@ -452,7 +495,7 @@ These are the actual entity IDs and config strings that worked in this house. Ph
 |---|---|
 | HA URL (LAN) | `http://192.168.0.122:8123` |
 | Apple TV `media_player` entity | `media_player.living_room` |
-| Plex-on-AppleTV `media_player` entity | `media_player.plex_plex_for_apple_tv_apple_tv` |
+| Plex-on-AppleTV `media_player` entity | `media_player.plex_plex_for_apple_tv_apple_tv` *(verify before trusting — see lesson #10; this entity ID is not guaranteed stable across Plex app updates)* |
 | Plex source name (for `select_source`) | `Plex` |
 | First proven movie (rating key) | The Super Mario Bros. Movie → `190` |
 | Working webhook ID | `play_super_mario_movie` |
@@ -464,8 +507,13 @@ Hard-won facts. Each of these cost time; capturing them so they don't have to be
 1. **Use Plex rating keys, not titles.** `media_content_id: 'Toy Story'` is exact-match against the stored title. Plex stores movies with metadata-fetched titles like `Toy Story (1995)`, and a single character mismatch fails silently — Plex opens, nothing plays. Numeric rating keys are permanent and unambiguous. Find one via the movie detail page URL in Plex web: `...details?key=%2Flibrary%2Fmetadata%2F190` → rating key `190`. Build the Phase 3 NFC mapping as `{uid: rating_key}`, not `{uid: title}`.
 2. **Companion auth is separate from AirPlay auth.** When pairing the Apple TV integration, both flows must complete. Without Companion, `media_player.turn_on` does nothing.
 3. **`media_player.select_source: Plex` beats `remote.send_command launch_app`.** Cleaner, doesn't depend on bundle IDs, uses the source list pyatv discovered for free.
-4. **Plex client reports ready before its session is.** A 5-second delay between launching Plex and calling `play_media` is the difference between reliable and not. For production Phase 3 use, wrap the play action in a 2–3-attempt retry — the first call occasionally still loses the race and the second always succeeds.
-5. **The Apple ID picker silently breaks automation.** Multiple users on Apple TV → tvOS shows a "Who's watching?" picker after wake → Plex launches behind it but never gets foreground → `play_media` lands in nothing. Single user account on Apple TV is the fix and is the right setting for a kid's box anyway.
+4. **Plex client reports ready before its session is.** A short delay (~8s in the current YAML) between launching Plex and calling `play_media` is necessary but **not sufficient** — superseded in practice by lessons #6 (Companion warm-up) and #9 (event-driven retry), both of which were derived after the initial Phase 1 sign-off. The 5s number originally noted here was a first approximation; the real reliability comes from the warm-up + retry combo, not the delay alone.
+5. **The Apple ID picker silently breaks automation.** Multiple users on Apple TV → tvOS shows a "Who's watching?" picker after wake → Plex launches behind it but never gets foreground → `play_media` lands in nothing. Single user account on Apple TV is the fix and is the right setting for a kid's box anyway. **Status:** picker disabled on this Apple TV (2026-05-06).
+6. **Plex Companion sessions go stale after periods of inactivity.** The HA Plex client entity will keep reporting `idle` (cached) even after the underlying Plex Media Server ↔ Plex-on-Apple-TV control channel has died. `play_media` against a stale Companion session succeeds at the API level but never reaches the Apple TV — symptom: Plex opens to home screen, movie never starts. **Symptom pattern:** automation works right after the Apple TV's Plex app was last used, fails after hours of idle, then "magically" works again once you manually navigate Plex. **Fix:** before issuing `play_media`, send any harmless command to the Plex client entity (e.g. `media_player.media_play` with `continue_on_error: true`) to force the Companion session to re-establish. Then proceed with `play_media`. The warm-up poke is the difference between "works sometimes" and "works every time."
+7. **`media_content_id` alone is a weak success check.** `state_attr(..., 'media_content_id')` can still match the previous movie's rating key for a moment after Plex stops — using it as the only retry-loop exit condition can cause the loop to falsely conclude playback started. Always pair it with `states(...) == 'playing'`.
+8. **`continue_on_timeout: true` on a wait_template hides root causes.** It's tempting to add for "robustness," but it just makes failures invisible. Leave wait_templates failing loudly during development; only add it once the underlying timing issue is understood and the automation has its own retry/recovery path.
+9. **Retry loops with fixed delays cause duplicate `play_media` calls.** A `repeat` with `play_media → fixed delay → check state` will fire `play_media` more than once whenever the entity's state hasn't propagated within the delay window — and the second call to Plex with the same rating key is interpreted as "restart the movie," visible as the movie playing then jumping back to the beginning a few seconds later. **Fix:** replace the fixed delay with a `wait_template` (timeout 10–15s) that waits for `state == 'playing'`. Retry only on timeout — i.e., only when there's real evidence the previous call didn't take. This converts a "fire-and-hope" retry into a "fire-and-confirm" retry.
+10. **Plex registers multiple client UUIDs for one Apple TV over time.** When the Plex app on Apple TV updates, signs out/in, or otherwise re-registers, Plex Media Server creates a new client identity without removing the old one. HA's Plex integration faithfully creates a separate device entry for each UUID. Only one of them is what the live Plex app reports under at any given moment; the rest become ghost entities (`restored: true`, `unavailable`). **How to detect:** Settings → Devices & services → Plex Media Server shows two "Plex (Plex for Apple TV ...)" entries, often differing in firmware version or "by Plex" vs "by tvOS" manufacturer string. **Fix:** in Plex web (`http://<synology-ip>:32400/web`) → Account → Authorized Devices, find the duplicate Apple TV entries and remove the stale one (older "last seen"). Then reload the HA Plex integration. Periodic re-check is wise — automations that once worked can silently break this way.
 6. **HA on Pi, not Synology.** Synology Container Manager's Docker has known issues extracting modern HA image layers (`failed to register layer ... archive/tar: invalid tar header`). The Pi runs vanilla Docker, updates cleanly. This is now baked into the architecture; not revisiting.
 
 ### Phase 2: NFC reading on the Pico (1 evening)
