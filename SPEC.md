@@ -1,19 +1,19 @@
 ---
 created: 2026-04-20, 3:48 PM
-updated: 2026-05-06
+updated: 2026-05-15
 tags:
 ---
 # NFC Movie Box for Von — Project Plan
 
-A Tonie-Box-inspired device that lets a 3.5-year-old start movies on the living room TV by placing 3D-printed figurines on top of a box. NFC identifies each figurine, Home Assistant translates that into commands for the Apple TV running Plex.
+A device that lets a 3.5-year-old start movies on the living room TV by **tapping** an NFC-tagged object (card, coin, mini character) against a small box. NFC identifies the tag, Home Assistant translates that into commands for the Apple TV running Plex.
 
 ---
 
 ## Inspiration & Goal
 
-Inspired by [Simply Explained's NFC movie library for kids](https://simplyexplained.com/blog/how-i-built-an-nfc-movie-library-for-my-kids/) and the [Tonie Box](https://us.tonies.com/pages/toniebox2).
+Closely modeled on [Simply Explained's NFC movie library for kids](https://simplyexplained.com/blog/how-i-built-an-nfc-movie-library-for-my-kids/). The Tonie Box was an earlier inspiration but the *interaction model has been deliberately changed away from Tonie's continuous-presence design* — see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md).
 
-Von (3.5 years old) already loves placing Cars and Toy Story figurines on his Tonie Box to play songs. This project brings that same physical-object-triggers-media experience to his movies. He should just put Buzz Lightyear on the box and Toy Story starts — no screens, no apps, no fuss.
+Von (3.5 years old) loves the physical-object-triggers-media experience of his Tonie Box for songs. This project brings that to his movies — but with a **tap-and-go** interaction: Von brings the Buzz Lightyear tag to the box, hears a confirmation chime, takes the tag away, and Toy Story plays. No magnets, no continuous presence, no "the figurine has to live on the box for the movie to keep playing."
 
 ---
 
@@ -26,22 +26,23 @@ Von (3.5 years old) already loves placing Cars and Toy Story figurines on his To
 > **Tooling note:** switched from Thonny (mentioned in Phase 2 plan below) to **VS Code + MicroPico extension** — same MicroPython workflow, fits the existing editor. Phase 2 instructions still apply, just substitute MicroPico's "Run current file on Pico" for Thonny's run button.
 
 **Deferred from Phase 1** (intentional — will fold into later work):
-- Pause webhook — naturally falls out of the Phase 3 `nfc/removed` automation; no need to build it standalone.
+- Pause webhook — now folds into the Phase 4 play/pause button automation (was previously planned to fold into the Phase 3 `nfc/removed` automation, which has since been struck — see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md)).
 - Tailscale remote access — works any time, not blocking anything.
 
 ---
 
 ## How it works (end-to-end flow)
 
-1. Von places Buzz Lightyear figurine on the box
-2. Box's NFC reader detects the tag, sends webhook to Home Assistant
+1. Von taps the Buzz Lightyear tag against the box (no need to hold it there)
+2. Box's NFC reader detects the tag UID once, fires a single MQTT/webhook event to Home Assistant, and enters "session active" state for that UID
 3. HA wakes Apple TV, launches Plex, starts Toy Story
 4. Apple TV plays on living room TV, audio through soundbar via HDMI-ARC/CEC
-5. Von removes figurine → box sends "paused" webhook → HA pauses Plex
-6. Von puts Buzz back within 1 hour → Plex resumes (native Plex behavior)
-7. If >1 hour passes, HA clears Plex resume position → next placement starts from the beginning
-8. Volume knob on box → sends Apple TV volume commands → soundbar adjusts via CEC
-9. Replay button on box → restarts current movie from beginning
+5. Von can walk away. The movie keeps playing. No tag has to stay near the box.
+6. **If Von taps the same tag again while Toy Story is still playing/paused:** the box ignores the tap (the session is already active for that UID) and gives a soft "already playing" cue (gentle chime + brief LED pulse). No new HA event.
+7. **If Von taps a different tag (e.g. Cars) while Toy Story is playing:** HA switches movies immediately — stops Toy Story, starts Cars. Plex's native resume position remembers where Toy Story was for the next time it's tapped.
+8. **Pause/resume:** Von presses the physical play/pause button on the box. Pure toggle: playing → paused, paused → playing. If nothing is playing, the box gives a soft error cue and does nothing.
+9. **Session ends** when the Apple TV goes back to sleep (HA detects this and tells the box). After session-end, the next tap of any tag — including the same one that started the previous session — is a fresh start (Plex's own resume window still applies for picking up mid-movie inside Plex's memory).
+10. Volume knob on box → sends Apple TV volume commands → soundbar adjusts via CEC.
 
 ---
 
@@ -53,7 +54,7 @@ Von (3.5 years old) already loves placing Cars and Toy Story figurines on his To
 │  ─ Pico 2 WH    │◀───▶│  ─ Home Assistant│─────▶│  ─ Plex app     │
 │  ─ PN532 NFC    │ MQTT │  ─ pyatv         │pyatv │  ─ Soundbar via │
 │  ─ Rotary enc.  │      │  ─ Plex integr.  │      │    HDMI-CEC     │
-│  ─ Replay btn   │      │  ─ Timer/state   │      │                 │
+│  ─ P/P button   │      │  ─ State machine │      │                 │
 │  ─ NeoPixel ring│      │  ─ Cloudflared   │      │                 │
 │  ─ Buzzer       │      │  (existing)      │      │                 │
 │  ─ OLED display │      │                  │      │                 │
@@ -78,12 +79,14 @@ Von (3.5 years old) already loves placing Cars and Toy Story figurines on his To
 
 **Key design principles:**
 
-- **Brains live in Home Assistant, not on the box.** The Pico is a dumb input device that reads NFC and publishes events. HA owns all logic (tag-to-movie mapping, resume timers, Apple TV control). This means changing a movie mapping doesn't require reflashing the box.
-- **Plex handles resume automatically.** The "resume within 1 hour" behavior is Plex's native behavior for free. HA only has to *clear* resume state if the hour elapses.
+- **Brains live in Home Assistant, not on the box.** The Pico is a dumb input device that reads NFC and publishes events. HA owns all logic (tag-to-movie mapping, Apple TV control, switching between movies). This means changing a movie mapping doesn't require reflashing the box.
+- **Tap-and-go, not continuous presence.** A tag near the reader fires *once*, then the tag goes away. The box does not require any object to remain on or near it for a movie to keep playing. This is the central design pivot away from the Tonie-Box model. See [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md).
+- **Plex handles resume automatically.** When HA stops one movie and switches to another (or when a movie is paused for a long time and the Apple TV sleeps), Plex's own resume position is what brings Von back to where he left off the next time that movie's tag is tapped. The box does not manage resume timers.
 - **Volume passes through Apple TV → HDMI-CEC → soundbar.** Same path as the existing Apple TV remote.
-- **NFC uses continuous polling** at ~10Hz for both placement AND removal detection (removal is what triggers pause).
-- **MQTT for bidirectional Pico ↔ HA communication.** Event-driven, low-overhead, plays nicely with both sides. The Pico publishes events (placed, removed, volume, replay); HA publishes state updates back (playing, paused, error) so the Pico can update LEDs and the OLED.
-- **Pico is immediately responsive**, HA confirms state. Some feedback is local (instant beep/LED on placement), some is HA-driven (confirmed "playing" state).
+- **NFC polls at ~10Hz but events are edge-triggered.** The Pico publishes a single `tapped` event the first time a UID is read; it then suppresses further events for that UID until the tag has been *absent* for ~2s (or a different UID appears). Von can mash the tag against the box repeatedly; HA sees one event.
+- **The Pico tracks "session active" state per-UID so it can give local feedback.** While a UID's session is active, re-reads of the same UID produce a *local* "already playing" cue (chime + LED pulse) and do not generate HA events. The Pico learns session-end either by HA pushing state via MQTT (preferred — Apple TV state changes) or by its own timeout.
+- **MQTT for bidirectional Pico ↔ HA communication.** Event-driven, low-overhead. The Pico publishes events (tapped, volume, play_pause); HA publishes state updates back (playing, paused, standby, error) so the Pico can update LEDs, the OLED, and its own session-active state.
+- **Pico is immediately responsive**, HA confirms state. Local feedback (instant beep/LED on tap acceptance) fires on the Pico the moment the read succeeds; HA-confirmed feedback (LED ring transitioning to "playing") follows once the movie is actually playing on the Apple TV.
 
 ---
 
@@ -107,16 +110,16 @@ Von (3.5 years old) already loves placing Cars and Toy Story figurines on his To
 | Raspberry Pi Pico 2 WH (with pre-soldered headers) | $7 | Wi-Fi + BT, RP2350 chip, low power. Pico WH (RP2040) is an acceptable fallback if 2 WH is out of stock. |
 | USB-A to micro-USB cable | $3 | For programming + power |
 | PN532 NFC module (I2C, with headers) | $10 | HiLetgo or Adafruit |
-| NeoPixel ring, WS2812B, 16 LEDs | $8 | For the illuminated ring around the figurine zone |
-| NTAG215 stickers, 50-pack | $10 | Any brand |
-| NFC ferrite shielding stickers | $5 | Prevents magnet/metal RF interference |
-| Neodymium disc magnets, 6mm x 2mm, 50-pack | $10 | For figurine/box connection |
+| NeoPixel ring, WS2812B, 16 LEDs | $8 | For the illuminated status ring on top of the box |
+| NTAG215 stickers, 50-pack | $10 | Any brand. Will be embedded into / stuck onto whatever physical token Von taps (cards, 3D-printed coins, small figurines, etc.) |
 | Mounting hardware (M2.5 screws, heat-set inserts) | $10 | For enclosure assembly |
-| **Subtotal (Phases 1–4)** | **~$63** | Enough to prototype everything |
+| **Subtotal (Phases 1–4)** | **~$48** | Enough to prototype everything |
 | Pico-specific protoboard (Pimoroni or Adafruit) | $5 | For Phase 5 — transfers breadboard layout to permanent wiring |
 | Female header sockets (2x20 pin) | $3 | Pico plugs into these on the protoboard, stays removable |
 | JST or screw-terminal connectors (optional) | $5 | For swappable component wiring |
-| **Total (through Phase 5)** | **~$76** | |
+| **Total (through Phase 5)** | **~$61** | |
+
+> **Struck from the original BOM** (no longer needed with the tap-and-go pivot): neodymium magnets and NFC ferrite shielding stickers. Magnets were only for figurine/box mating; without continuous-presence seating there's nothing to mate. Ferrite was only needed because magnets near an NFC antenna detune the field — no magnets, no detuning, no ferrite.
 
 > **Why the pre-soldered "H" variant:** saves soldering 40 pins. If you buy the bare Pico 2 W it's $6; the "H" (pre-soldered) is $7. Worth the dollar.
 >
@@ -139,25 +142,26 @@ Von (3.5 years old) already loves placing Cars and Toy Story figurines on his To
 
 ---
 
-## Figurine & box physical design
+## Tag tokens & box physical design
 
-**Figurine base:**
+**Tag tokens** (the things Von taps against the box):
 
-- Custom 3D-printed characters (Buzz, Lightning McQueen, etc.) — one figurine per movie, 1:1 mapping
-- Central recess holds an NTAG215 sticker
-- Ferrite shield between NFC tag and any metal/magnets
-- 3–4 neodymium magnets arranged in a ring around the NFC tag (geometry matters — tag centered, magnets offset to the sides to avoid RF detuning)
+- NTAG215 stickers embedded in / stuck on whatever physical form works best. Options to explore in Phase 5+:
+  - Laminated printed cards with movie poster art (cheapest, fastest, blog-post style)
+  - 3D-printed "coins" with a recess for the sticker and a printed character on the face
+  - Mini 3D-printed figurines (still possible; just no magnetic mating to the box)
+- Form factor decision is **deferred to Phase 5** — any NTAG215 anywhere works for development/testing. Final form is a UX decision for Von's hands, not a firmware decision.
+- No ferrite shielding, no magnets in the token.
 
 **Box top:**
 
-- Flat zone where figurine sits, only big enough for one figurine at a time (prevents ambiguity)
-- PN532 NFC antenna centered directly under the figurine placement zone
-- Matching magnets in the top of the box to snap figurine into place
-- NeoPixel 16-LED ring around the figurine zone, diffused through translucent PLA
-- Rotary encoder through the top surface (volume)
-- Replay button (tactile, easy for a toddler)
-- OLED display in a window on the front face
-- Buzzer vented for clear sound
+- A clearly-marked tap zone (printed icon or color marker) where the NFC antenna sits directly underneath, so Von learns where to aim.
+- PN532 NFC antenna centered directly under the tap zone, as close to the surface as possible (read range is short — millimeters to a few cm with NTAG215 stickers).
+- NeoPixel 16-LED ring on top, around or near the tap zone, diffused through translucent PLA — the primary visual status surface.
+- Rotary encoder through the top surface (volume).
+- Play/pause button (tactile, big and easy for a toddler thumb).
+- OLED display in a window on the front face (movie title, parent-readable error messages).
+- Buzzer vented for clear sound.
 
 **Materials:**
 
@@ -171,40 +175,47 @@ Von (3.5 years old) already loves placing Cars and Toy Story figurines on his To
 
 ### NeoPixel ring states
 
-| State | Animation | Color | Brightness |
-|---|---|---|---|
-| Idle (no figurine) | Slow breathing | Soft warm white | ~10% |
-| Figurine placed | Quick sparkle → solid | Green | ~20% |
-| Loading / contacting HA | Chase (single LED runs the ring) | Blue | ~30% |
-| Playing | Steady solid | Green | ~20% |
-| Paused (within 1hr resume window) | Slow breathing | Amber | ~15% |
-| Unknown tag / error | 3 flashes | Red | ~40% |
-| Replay pressed | White spiral, then back to green | White → Green | ~30% |
-| Resume window expired | Single slow fade to off | Amber | → 0 |
+The LED ring is the **primary visual status surface**. States below are listed in roughly the order Von will encounter them in a session.
+
+| State | When | Animation | Color | Brightness |
+|---|---|---|---|---|
+| Off | Box unpowered, or parental "quiet" mode | All LEDs off | — | 0% |
+| On (idle) | Box awake, no movie playing, ready for a tap | Slow breathing | Soft warm white | ~10% |
+| Read accepted | A tap just produced a new event being sent to HA | Quick sparkle → settle | Green | ~25% |
+| Already playing (same tag re-tapped) | Tag matches the currently active session — local no-op | Single soft pulse | Same as current state | brief +10% |
+| Loading | HA event sent, waiting for Apple TV to start playing | Chase (single LED runs the ring) | Blue | ~30% |
+| Playing | HA confirms movie is playing | Steady solid | Green | ~20% |
+| Paused | Button pressed during playback | Slow breathing | Amber | ~15% |
+| Standby | Apple TV is asleep (session ended) — box still on | Very slow breathing | Soft warm white | ~5% |
+| Unknown tag / error | UID with no mapping, or HA reports an error | 3 flashes then back to prior state | Red | ~40% |
 
 ### Buzzer sounds
 
-- **Placement:** rising two-note chime ("got it")
-- **Removal:** descending two-note chime ("paused")
-- **Replay:** distinct "reset" chime (different from placement)
-- **Error:** soft low tone, not harsh
-- **Keep it musical and gentle** — a 3.5-year-old will hear these a lot
+- **Tap accepted (new movie):** rising two-note chime ("got it")
+- **Tap rejected, already playing:** single soft mid-note ("yeah I know")
+- **Tap unknown UID:** soft low descending tone ("hmm?")
+- **Play/pause button — playing → paused:** descending two-note chime
+- **Play/pause button — paused → playing:** rising two-note chime (same as tap-accepted is fine)
+- **Play/pause button — nothing to act on:** soft low tone (same as unknown-UID error tone is fine)
+- **Keep it musical and gentle** — a 3.5-year-old will hear these a lot.
 
 ### OLED display
 
-- **Idle:** clock or cute animation
-- **Figurine detected:** movie title
-- **Playing:** progress bar, elapsed time
+- **Idle / standby:** clock or cute animation
+- **Tag detected:** movie title (briefly)
+- **Playing:** movie title, optionally a progress bar
+- **Paused:** "Paused — {movie title}"
 - **Error:** human-readable error message (for the parent)
 
 Useful for Von (magic factor), useful for dad (debugging).
 
-### Replay button behavior
+### Play/pause button behavior
 
-- **Press while playing:** restart from beginning of current movie
-- **Press while paused (figurine still on, within resume window):** restart from beginning, clear resume state
-- **Press while idle (no figurine):** do nothing, soft error beep
-- **Long press (3s):** reserved for future use (parental override, box reset, etc.)
+- **Press while playing:** pause (HA fires `media_player.media_pause`).
+- **Press while paused:** resume (HA fires `media_player.media_play`).
+- **Press while idle / standby (nothing playing):** do nothing, soft error beep.
+- **Long press (3s):** reserved for future use (parental override, box reset, etc.) — not implemented in Phase 4.
+- **No restart-from-beginning behavior.** If Von wants to restart, he taps the tag again after the current session has ended (Apple TV asleep). Within an active session, the only way to start a movie over is to tap a different tag and then tap the original tag back — which Plex's resume window will still bias toward picking up mid-movie, so true "restart from beginning" is a Phase 6+ feature if it turns out to matter.
 
 ---
 
@@ -215,11 +226,13 @@ Useful for Von (magic factor), useful for dad (debugging).
 - **Plex API via HA** for movie triggering
 - **MQTT** (Mosquitto broker on Synology) for Pico ↔ HA communication
 - **PN532 NFC reader** with **NTAG215 stickers**
-- **Continuous polling at 10Hz** for presence detection (~100ms responsiveness)
+- **Tap-and-go interaction**: edge-triggered single read per UID, ~2s absence-based cooldown before the same UID can re-fire (see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md))
+- **Underlying poll rate ~10Hz** — gives ~100ms tap responsiveness; the polling itself is unchanged, only the event semantics shifted
 - **Rotary encoder** on PIO for volume (better than a pot for infinite rotation)
-- **NeoPixels driven via PIO**, running at 25% brightness (safely powered from Pico's 3V3 or VSYS rail depending on final design)
-- **One figurine per movie** (simple mental model)
-- **Resume window: 1 hour**
+- **Physical play/pause button** for pause/resume (no removal-triggers-pause anymore)
+- **NeoPixels driven via PIO**, running at 25% brightness (safely powered from Pico's VSYS rail)
+- **One tag per movie** (simple mental model)
+- **No on-box resume timer.** Plex's native resume position handles "pick up where you left off"; HA does not manage a 1-hour clear cycle anymore.
 
 ---
 
@@ -452,11 +465,13 @@ This is the webhook the NFC trigger will eventually call. It has to handle the f
 
 **✅ Checkpoint:** Single `curl` plays the movie from a fully asleep Apple TV.
 
-#### Step 7: Pause webhook (deferred — will fold into Phase 3)
+#### Step 7: Pause webhook (deferred — will fold into Phase 4)
 
-This was originally a separate Phase 1 step. Skipping it standalone — when the NFC `removed` automation is built in Phase 3, it'll call `media_player.media_pause` as one of its actions, which is the same thing. No reason to build a parallel test webhook that won't survive into the final design.
+This was originally a separate Phase 1 step. Skipping it standalone — when the play/pause button automation is built in Phase 4, it'll call `media_player.media_pause` (or `.media_play`) on the Plex client entity, which covers the same need.
 
-If you ever want it for manual testing in the meantime, it's a one-action automation:
+(Originally this deferral pointed at the Phase 3 `nfc/removed` automation. That automation no longer exists — see [ADR 0001](../docs/adr/0001-tap-and-go-instead-of-continuous-presence.md).)
+
+If you want a manual pause for testing in the meantime, it's a one-action automation:
 ```yaml
 - target:
     entity_id: media_player.plex_plex_for_apple_tv_apple_tv
@@ -484,7 +499,7 @@ If you ever want it for manual testing in the meantime, it's a one-action automa
 - [x] Plex integration connected, library visible
 - [x] Plex-on-AppleTV `media_player` entity exists
 - [x] `curl` webhook plays the movie from a fully asleep Apple TV (one command, full cold start)
-- [ ] Pause webhook — *deferred to Phase 3 (rolls into `nfc/removed` automation)*
+- [ ] Pause webhook — *deferred to Phase 4 (rolls into play/pause button automation)*
 - [ ] Tailscale set up — *optional, no blocker*
 
 #### Phase 1 outcomes — values to reuse in Phase 3
@@ -518,61 +533,73 @@ Hard-won facts. Each of these cost time; capturing them so they don't have to be
 
 ### Phase 2: NFC reading on the Pico (1 evening)
 
-**Goal:** Pico detects figurine placement and removal, prints tag UIDs over USB serial.
+**Goal:** Pico detects a tag tap and prints the UID *once per tap* over USB serial.
 
-- Install [Thonny](https://thonny.org/) on your laptop — easy MicroPython IDE with built-in Pico support
-- Flash MicroPython firmware onto the Pico 2 W (Thonny can do this in a couple clicks, or flash the UF2 manually)
-- Wire up PN532 over I2C (4 wires: 3V3, GND, SDA on GP0, SCL on GP1 — or any I2C-capable pair)
-- Install `micropython-adafruit-pn532` or equivalent MicroPython NFC library (may need to copy a `.py` file to the Pico manually — MicroPython doesn't have `pip install`, it has `mpremote` or file copy)
-- Write a polling script (10Hz) that prints `PLACED: <UID>` / `REMOVED: <UID>` over the USB serial REPL
-- Program several NTAG215 stickers (or just note their UIDs — read-only works fine since we're mapping in HA)
+- Use VS Code + MicroPico extension (already set up).
+- MicroPython firmware is already flashed (sub-milestone 1 done).
+- Wire up PN532 over I2C (4 wires: 3V3, GND, SDA on GP0, SCL on GP1 — or any I2C-capable pair). **PN532 DIP switches must be set to I2C** (ships in HSU/UART by default). — sub-milestone 2.
+- Install `micropython-adafruit-pn532` or equivalent MicroPython NFC library (copy the `.py` file into the Pico's `lib/` — MicroPython doesn't have `pip install`).
+- Write a polling script that:
+  - Polls the PN532 at ~10Hz for a present tag.
+  - When a UID is read that wasn't present on the previous poll, prints `TAPPED: <UID>` once.
+  - Suppresses further `TAPPED` lines for that UID until the tag has been absent for ~2s (or until a different UID is read).
+  - That's it — no `PLACED`/`REMOVED` pair, no continuous-presence semantics.
+- Program (or just note the UIDs of) several NTAG215 stickers — read-only is fine since mapping lives in HA.
+
+**Why the absence cooldown:** a 3.5-year-old will hold a tag against the box for several seconds. We don't want one tap to produce ten events. The cooldown also gives the right semantics if Von leaves a tag sitting on the box: it fires once and stays quiet.
 
 ### Phase 3: Box talks to HA via MQTT (1 evening)
 
-**Goal:** Placing a figurine plays the movie; removing it pauses; 1-hour timeout restart works.
+**Goal:** Tapping a tag plays the mapped movie. Tapping a different tag while one is playing switches movies. Tapping the same tag while it's already playing is a soft no-op.
 
 **Pre-requisite:** Deploy Mosquitto MQTT broker as a Docker container on the Synology (compose shown in "Recommended order of operations" below). Add the MQTT integration to HA on the Pi, pointing at the Synology's LAN IP on port 1883. Configure credentials.
 
-Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all three communicate via the Synology's MQTT broker over LAN. The Pico's broker address is the Synology's LAN IP. HA connects to the broker at the Synology's LAN IP too (not localhost, since they're on different devices now).
+Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all three communicate via the Synology's MQTT broker over LAN. The Pico's broker address is the Synology's LAN IP. HA connects to the broker at the Synology's LAN IP too.
 
-On the Pico:
-- Add Wi-Fi credentials (via `secrets.py` or similar, never commit to git)
-- Use `umqtt.simple` (built into MicroPython) to connect to the broker
-- Extend NFC polling script: on place/remove events, publish to MQTT topics like:
-  - `moviebox/nfc/placed` with payload `{"uid": "04A1B2C3"}`
-  - `moviebox/nfc/removed` with payload `{"uid": "04A1B2C3"}`
-- Subscribe to `moviebox/state` for incoming state updates from HA (used later in Phase 4)
-- Implement automatic reconnection if Wi-Fi or MQTT drops
+**On the Pico:**
 
-On HA:
-- Create a tag-UID-to-movie-title mapping (YAML config, input_select helpers, or a custom lookup in automations)
-- Automation on `moviebox/nfc/placed` MQTT message:
-  - Look up movie from UID
-  - If same UID as last placement AND within 1-hour window → `media_player.media_play` (resumes)
-  - Else → launch Plex app + `play_media` with the mapped title
-- Automation on `moviebox/nfc/removed` MQTT message:
-  - `media_player.media_pause`
-  - Start 1-hour timer (HA timer helper)
-  - Remember last UID and timestamp
-- On timer expiry: clear Plex resume state for that movie (via Plex API call) OR just forget last-UID so next placement starts fresh
+- Add Wi-Fi credentials (via `secrets.py`, gitignored).
+- Use `umqtt.simple` (built into MicroPython) to connect to the broker.
+- Extend the Phase 2 polling script: on each `tapped` event, publish to `moviebox/nfc/tapped` with payload `{"uid": "04A1B2C3"}`.
+- Subscribe to `moviebox/state` for state updates from HA. The Pico uses these to:
+  - Know whether a session is active and for which UID (so re-taps of the same UID stay local)
+  - Drive the LED ring (off/idle/loading/playing/paused/standby/error)
+- Implement automatic reconnection if Wi-Fi or MQTT drops.
 
-### Phase 4: Rotary encoder + replay button + NeoPixel ring + buzzer + OLED (1–2 evenings)
+**On HA:**
+
+- Create a tag-UID-to-Plex-rating-key mapping. Recommended shape: a YAML config or an `input_text` helper holding a JSON blob, e.g. `{"04A1B2C3": "190", "04D5E6F7": "456"}`. **Rating keys, not titles** — see Phase 1 lesson #1.
+- Automation on `moviebox/nfc/tapped` MQTT message:
+  1. Look up rating key from UID. If unknown → publish `moviebox/state` with `error: unknown_tag` and return.
+  2. If the Apple TV is currently playing this rating key → publish `moviebox/state` with `already_playing: <uid>` and return. (Pico will produce the "already playing" local cue. This is a safety belt — the Pico should already have suppressed the event, but covers cases where the Pico's state got out of sync.)
+  3. Otherwise, run the cold-start / switch-movie sequence: wake Apple TV if needed, select Plex source if needed, `play_media` with the new rating key. Same machinery as the Phase 1 webhook.
+  4. Publish `moviebox/state` with `playing: <uid>` once Apple TV reports `state == 'playing'` with the matching rating key.
+- Watch the Apple TV `media_player.living_room` entity for state transitions and republish to `moviebox/state` accordingly:
+  - Apple TV `playing` → `state: playing, uid: <whichever>`
+  - Apple TV `paused` → `state: paused, uid: <whichever>`
+  - Apple TV `standby` / `off` / `idle` for >N seconds → `state: standby` (this is what tells the Pico the session has ended)
+
+**No removal automation.** The `moviebox/nfc/removed` topic from the old design is gone. Pause comes from the play/pause button (Phase 4); session-end comes from Apple TV going to sleep.
+
+### Phase 4: Rotary encoder + play/pause button + NeoPixel ring + buzzer + OLED (1–2 evenings)
 
 **Goal:** Full feedback vocabulary working on the bench-breadboarded box.
 
 - Wire rotary encoder using **PIO** (the Pico's killer feature for encoders — zero missed pulses). Publishes `moviebox/volume/up` or `moviebox/volume/down` on detent changes.
-- Wire replay button (with debouncing) → publishes `moviebox/replay`
-- HA automations handle volume (send Apple TV volume commands) and replay (`media_seek` to 0, or re-issue `play_media` with the same movie to restart)
+- Wire the play/pause button (with debouncing) → publishes `moviebox/button/play_pause`.
+- HA automations:
+  - Volume up/down → send Apple TV volume commands.
+  - `moviebox/button/play_pause` → if Apple TV `state == 'playing'`, fire `media_player.media_pause` on the Plex client entity; if `state == 'paused'`, fire `media_player.media_play`; otherwise no-op (Pico already produces the error beep locally).
 - Wire NeoPixel ring data pin to a PIO-capable GPIO (any GPIO on the Pico can do PIO). Power considerations:
   - 16 LEDs at 25% brightness draw ~240mA — Pico's 3V3 regulator can't handle this. Power LEDs from VSYS (raw 5V from USB) and share ground with the Pico.
   - Use a level shifter or 330Ω series resistor on the data line if color quality looks off (5V LEDs, 3.3V signal usually works fine in practice).
-- Wire buzzer to a PWM-capable GPIO (any Pico GPIO supports PWM)
+- Wire buzzer to a PWM-capable GPIO (any Pico GPIO supports PWM).
 - Wire OLED to the same I2C bus as the PN532 (shared SDA/SCL, different I2C addresses — no conflict). MicroPython has `ssd1306` built in.
-- MicroPython animation functions for each LED state
-- MicroPython tone-playing functions for each buzzer event
-- OLED renders current state (idle / placed / playing / error)
+- MicroPython animation functions for each LED state defined in "User feedback vocabulary."
+- MicroPython tone-playing functions for each buzzer event.
+- OLED renders current state (idle / playing / paused / error / movie title).
 
-**State sync:** the Pico subscribes to `moviebox/state` MQTT topic. HA publishes state updates there (e.g. `{"state": "playing", "movie": "Toy Story"}`), and the Pico updates LEDs and the OLED accordingly. This is cleaner than HTTP-back-to-the-device and comes essentially for free once the MQTT broker is set up in Phase 3.
+**State sync:** the Pico subscribes to `moviebox/state` MQTT topic. HA publishes state updates there (e.g. `{"state": "playing", "uid": "04A1B2C3", "title": "Toy Story"}`), and the Pico updates LEDs, OLED, and its own "session active" tracking accordingly. This is what lets the Pico tell "same tag = no-op" from "new tag = switch."
 
 ### Phase 5: Enclosure v1 (prototype)
 
@@ -589,10 +616,10 @@ On HA:
 **Enclosure design:**
 
 - Design in Fusion 360 / OnShape / Tinkercad
-- Box holds: Pico 2 WH on protoboard, PN532 under top surface, rotary encoder through top, replay button through top, NeoPixel ring just below top surface around figurine zone, OLED window on front face, USB cable out back for power, buzzer vented
+- Box holds: Pico 2 WH on protoboard, PN532 under top surface (as close to the surface as possible — read range is short), rotary encoder through top, play/pause button through top, NeoPixel ring just below top surface around the tap zone, OLED window on front face, USB cable out back for power, buzzer vented
 - The Pico is tiny (~21mm × 51mm) and runs cool — no heat management or ventilation needed
-- Figurine base template: centered NFC sticker recess, ferrite shield pocket, 3–4 magnet holes arranged around
-- Top of box has matching magnets with correct polarity
+- **Tag token v1:** laminated cards with movie poster art and an NTAG215 sticker on the back. Cheapest, fastest, blog-post style. Lets you iterate on the box without committing to a 3D-printed token form.
+- **Tag token v2+:** 3D-printed coins or mini figurines with a recess for the NTAG215 sticker. No magnet holes, no ferrite pocket — those were only needed for the old magnetic-mating design.
 - **Print ring diffuser in translucent or white PLA**
 - Keep v1 intentionally ugly — it's a functional prototype; aesthetics come later
 
@@ -600,7 +627,7 @@ On HA:
 
 As you live with it:
 
-- Custom figurine designs (Buzz, Lightning McQueen, others)
+- Custom tag-token designs — printed cards, 3D-printed coins, or mini figurines for Buzz, Lightning McQueen, etc.
 - Battery + charging dock (pogo pins or magnetic connector) — Pico's low power means a modest LiPo should last days
 - Parental controls in HA (no movies after bedtime, daily time limits)
 - Richer OLED UI (movie poster thumbnails, time-remaining)
