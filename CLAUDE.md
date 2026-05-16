@@ -4,7 +4,9 @@ This is the always-on context. The full project plan, rationale, and lessons lea
 
 ## What this is
 
-A Tonie-Box-inspired device that lets a 3.5-year-old start movies on the living room TV by placing 3D-printed figurines on top of a box. NFC identifies each figurine; Home Assistant translates that into Apple TV + Plex commands.
+A device that lets a 3.5-year-old start movies on the living room TV by **tapping** an NFC-tagged object (card, coin, mini character — form factor TBD) against a small box. NFC identifies the tag; Home Assistant translates that into Apple TV + Plex commands.
+
+The interaction model is **tap-and-go**, not continuous-presence-on-the-box like a Tonie Box. The tag is brought to the reader, fires once, and then goes away. The movie keeps playing whether the tag is nearby or not. Pause is a physical button on the box, not "removal of the figurine." See [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md).
 
 The user is the dad building this for his son Von.
 
@@ -12,13 +14,13 @@ The user is the dad building this for his son Von.
 
 **Phase 1 ✅ done** — Apple TV + Plex pipeline working end-to-end via HA webhooks. A single `curl` from cold sleep wakes TV + soundbar + Apple TV, opens Plex, plays a chosen movie.
 
-**Phase 2 ▶️ in progress** — Pico detects figurine placement and removal, prints tag UIDs over USB serial.
+**Phase 2 ▶️ in progress** — Pico detects a tag tap and prints the UID *once per tap* over USB serial.
 
 Sub-milestones for Phase 2, in order:
 
 1. ✅ **Pico alive** — MicroPython v1.28.0 flashed, MicroPico connected, `blink.py` toggles the onboard LED.
 2. **PN532 wired and talking** — I2C handshake successful, library loaded, reader responds with its firmware version. *(currently here)*
-3. **NFC polling loop** — 10Hz placement/removal detection printing `PLACED: <UID>` / `REMOVED: <UID>` over serial.
+3. **Single-shot tap detection** — Poll the PN532 at ~10Hz; when a UID is seen that wasn't present in the previous poll, print `TAPPED: <UID>` once over USB serial. Suppress further events for that UID until the tag has been absent ~2s (or a different UID is seen). No `PLACED`/`REMOVED` pair.
 
 Don't skip ahead. Each sub-milestone isolates one variable for debugging.
 
@@ -73,7 +75,7 @@ Pico 2 WH  ──MQTT──▶  Mosquitto (Synology)  ◀─MQTT──▶  Home 
 Local feedback (LEDs, OLED, buzzer)                         Living room TV
 ```
 
-**Brains live in Home Assistant, not on the Pico.** The Pico is a dumb input device that publishes events; HA owns all logic (tag→movie mapping, resume timers, Apple TV control). Changing a movie mapping never requires reflashing the box.
+**Brains live in Home Assistant, not on the Pico.** The Pico is a near-dumb input device that publishes events; HA owns all logic (tag→movie mapping, Apple TV control, switching). Changing a movie mapping never requires reflashing the box. The one piece of *local* state the Pico cares about is "is there an active session for UID X?" — so it can suppress duplicate taps and produce local feedback for re-taps. That state is driven by HA via the `moviebox/state` MQTT topic.
 
 ## Phase 1 reference values (use these exact strings)
 
