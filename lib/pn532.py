@@ -8,7 +8,7 @@
 # Designed to be uploaded once to the Pico's flash under /lib/pn532.py;
 # orchestrator scripts then `from pn532 import PN532`.
 #
-# Reference: the inline implementation in test/nfc_tap_test.py, plus the
+# Reference: the inline implementation in test/bench/nfc_tap_test.py, plus the
 # Phase 2 lessons in SPEC.md (status-byte 0x01, MxRtyPassiveActivation = 0,
 # 7-byte NTAG UIDs starting 0x04).
 

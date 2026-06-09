@@ -23,14 +23,14 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 
 **✅ Phase 2 done — NFC reading on the Pico.**
 - ✅ Sub-milestone 1: MicroPython v1.28.0 flashed onto the Pico 2 WH, VS Code + MicroPico extension connected over USB serial, `blink.py` runs and toggles the onboard LED.
-- ✅ Sub-milestone 2: PN532 V3 (HiLetgo red board) wired to the Pico over I2C on GP4 (SDA) / GP5 (SCL), DIP switches set to I2C mode, responds at address `0x24`, identifies itself as PN532 firmware 1.6 via the `GetFirmwareVersion` command. Bench-test scripts saved to `test/i2c_scan.py` and `test/nfc_firmware_test.py`.
-- ✅ Sub-milestone 3: single-shot tap detection working. Polls at ~10Hz via `InListPassiveTarget`, prints `TAPPED: <UID>` exactly once per tap, suppresses re-fires until the tag has been absent ≥2s. Confirmed with an NTAG215 sticker (UID `04462765C82A81`): hold-for-5s produces one event, rapid re-tap within 2s is suppressed, post-cooldown re-tap fires correctly. Inline minimal driver lives in `test/nfc_tap_test.py`; will be extracted to `lib/pn532.py` during Phase 3.
+- ✅ Sub-milestone 2: PN532 V3 (HiLetgo red board) wired to the Pico over I2C on GP4 (SDA) / GP5 (SCL), DIP switches set to I2C mode, responds at address `0x24`, identifies itself as PN532 firmware 1.6 via the `GetFirmwareVersion` command. Bench-test scripts saved to `test/bench/i2c_scan.py` and `test/bench/nfc_firmware_test.py`.
+- ✅ Sub-milestone 3: single-shot tap detection working. Polls at ~10Hz via `InListPassiveTarget`, prints `TAPPED: <UID>` exactly once per tap, suppresses re-fires until the tag has been absent ≥2s. Confirmed with an NTAG215 sticker (UID `04462765C82A81`): hold-for-5s produces one event, rapid re-tap within 2s is suppressed, post-cooldown re-tap fires correctly. Inline minimal driver lives in `test/bench/nfc_tap_test.py`; will be extracted to `lib/pn532.py` during Phase 3.
 
 **▶️ Phase 3 in progress — MQTT to Home Assistant.**
 - ✅ Sub-milestone 1: Mosquitto MQTT broker deployed as a Docker container on the Synology at `192.168.0.123:1883`. Authenticated user `vonbox` created via `mosquitto_passwd`. Verified from the laptop using `mosquitto_pub`/`mosquitto_sub` — a message published to `test/hello` is received by a subscriber within milliseconds.
-- ✅ Sub-milestone 2: Pico associates with the home Wi-Fi (`Jabby`), receives DHCP lease `192.168.0.80`, reports RSSI `-42 dBm`. Credentials live in `secrets.py` (gitignored); uploaded to the Pico's flash via MicroPico "Upload current file" so subsequent test scripts can `from secrets import ...`. Test script: `test/wifi_test.py`.
-- ✅ Sub-milestone 3: Pico → Mosquitto verified end-to-end. `test/mqtt_hello_test.py` publishes `hello N` to `test/hello` every 5 seconds via `umqtt.simple`; laptop `mosquitto_sub` receives each one within milliseconds. `umqtt.simple` is **not** frozen into the `RPI_PICO2_W` MicroPython 1.28.0 build despite older docs implying otherwise — installed once via `mip.install("umqtt.simple")` to `/lib/umqtt/simple.mpy` using `test/install_umqtt.py`.
-- ✅ Sub-milestone 4: Inline PN532 driver extracted into `lib/pn532.py` (class `PN532` with `init()` and `read_passive_target()`; framing helpers private; raises `PN532Error` on bring-up failure). Orchestrator at `test/nfc_to_mqtt_test.py` connects Wi-Fi → MQTT → PN532, then runs the Phase 2 polling loop and publishes `{"uid": "<HEX>"}` to `vonbox/nfc/tapped` on each new tap. Edge-trigger + 2s-absence cooldown preserved verbatim. Verified end-to-end: NTAG215 `04462765C82A81` produces `vonbox/nfc/tapped {"uid": "04462765C82A81"}` on the Mac subscriber; hold-for-5s = one publish, rapid re-tap suppressed, post-cooldown re-tap fires, tag-swap fires immediately with the new UID.
+- ✅ Sub-milestone 2: Pico associates with the home Wi-Fi (`Jabby`), receives DHCP lease `192.168.0.80`, reports RSSI `-42 dBm`. Credentials live in `secrets.py` (gitignored); uploaded to the Pico's flash via MicroPico "Upload current file" so subsequent test scripts can `from secrets import ...`. Test script: `test/bench/wifi_test.py`.
+- ✅ Sub-milestone 3: Pico → Mosquitto verified end-to-end. `test/bench/mqtt_hello_test.py` publishes `hello N` to `test/hello` every 5 seconds via `umqtt.simple`; laptop `mosquitto_sub` receives each one within milliseconds. `umqtt.simple` is **not** frozen into the `RPI_PICO2_W` MicroPython 1.28.0 build despite older docs implying otherwise — installed once via `mip.install("umqtt.simple")` to `/lib/umqtt/simple.mpy` using `test/bench/install_umqtt.py`.
+- ✅ Sub-milestone 4: Inline PN532 driver extracted into `lib/pn532.py` (class `PN532` with `init()` and `read_passive_target()`; framing helpers private; raises `PN532Error` on bring-up failure). Orchestrator at `test/bench/nfc_to_mqtt_test.py` connects Wi-Fi → MQTT → PN532, then runs the Phase 2 polling loop and publishes `{"uid": "<HEX>"}` to `vonbox/nfc/tapped` on each new tap. Edge-trigger + 2s-absence cooldown preserved verbatim. Verified end-to-end: NTAG215 `04462765C82A81` produces `vonbox/nfc/tapped {"uid": "04462765C82A81"}` on the Mac subscriber; hold-for-5s = one publish, rapid re-tap suppressed, post-cooldown re-tap fires, tag-swap fires immediately with the new UID.
 - ▶️ Sub-milestone 5 next: HA automation. UID → Plex rating-key mapping (input_text helper or YAML config). On `vonbox/nfc/tapped`, look up the rating key and run the Phase 1 cold-start sequence. First true tap-to-play moment.
 - Sub-milestone 6 (planned): Bidirectional state sync. HA publishes Apple TV state transitions to `vonbox/state`; Pico subscribes and uses the state to decide whether a re-tap of the same UID is a local no-op or a fresh session.
 
@@ -455,7 +455,7 @@ This is the webhook the NFC trigger will eventually call. It has to handle the f
    mode: single
    ```
 
-   The working copy of this YAML lives at `test/play_mario.yaml` in the repo and is the canonical source. If you tune timing or fix a bug, update there first; this inline version is for narrative reference and may lag behind.
+   The working copy of this YAML lives at `test/home-assistant/play_mario.yaml` in the repo and is the canonical source. If you tune timing or fix a bug, update there first; this inline version is for narrative reference and may lag behind.
 
 3. Save, sleep the Apple TV, wait 10s, then from your laptop:
    ```bash
@@ -590,17 +590,43 @@ Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all
 **On HA:**
 
 - Create a tag-UID-to-Plex-rating-key mapping. Recommended shape: a YAML config or an `input_text` helper holding a JSON blob, e.g. `{"04A1B2C3": "190", "04D5E6F7": "456"}`. **Rating keys, not titles** — see Phase 1 lesson #1.
-- Automation on `vonbox/nfc/tapped` MQTT message:
-  1. Look up rating key from UID. If unknown → publish `vonbox/state` with `error: unknown_tag` and return.
-  2. If the Apple TV is currently playing this rating key → publish `vonbox/state` with `already_playing: <uid>` and return. (Pico will produce the "already playing" local cue. This is a safety belt — the Pico should already have suppressed the event, but covers cases where the Pico's state got out of sync.)
-  3. Otherwise, run the cold-start / switch-movie sequence: wake Apple TV if needed, select Plex source if needed, `play_media` with the new rating key. Same machinery as the Phase 1 webhook.
-  4. Publish `vonbox/state` with `playing: <uid>` once Apple TV reports `state == 'playing'` with the matching rating key.
-- Watch the Apple TV `media_player.living_room` entity for state transitions and republish to `vonbox/state` accordingly:
-  - Apple TV `playing` → `state: playing, uid: <whichever>`
-  - Apple TV `paused` → `state: paused, uid: <whichever>`
-  - Apple TV `standby` / `off` / `idle` for >N seconds → `state: standby` (this is what tells the Pico the session has ended)
+- Automation on `vonbox/nfc/tapped` MQTT message (every `vonbox/state` publish uses the **tagged payload** — see "vonbox/state payload" below):
+  1. Look up rating key from UID. If unknown → publish `vonbox/state` `{"state": "error", "uid": "<uid>", "title": null, "reason": "unknown_tag"}` and return.
+  2. If the Apple TV is currently playing this rating key → publish `vonbox/state` `{"state": "already_playing", "uid": "<uid>", "title": "<title>", "reason": null}` and return. (Pico will produce the "already playing" local cue. This is a safety belt — the Pico should already have suppressed the event, but covers cases where the Pico's state got out of sync.)
+  3. Otherwise, run the cold-start / switch-movie sequence: wake Apple TV if needed, select Plex source if needed, `play_media` with the new rating key. Same machinery as the Phase 1 webhook. (Optionally publish `{"state": "loading", "uid": "<uid>", ...}` while the wake/play sequence is in flight.)
+  4. Publish `vonbox/state` `{"state": "playing", "uid": "<uid>", "title": "<title>", "reason": null}` once Apple TV reports `state == 'playing'` with the matching rating key.
+- Watch the Apple TV `media_player.living_room` entity for state transitions and republish to `vonbox/state` accordingly (always the tagged payload):
+  - Apple TV `playing` → `{"state": "playing", "uid": "<whichever>", "title": "<title>", "reason": null}`
+  - Apple TV `paused` → `{"state": "paused", "uid": "<whichever>", "title": "<title>", "reason": null}`
+  - Apple TV `standby` / `off` / `idle` for >N seconds → `{"state": "standby", "uid": null, "title": null, "reason": null}` (this is what tells the Pico the session has ended)
 
 **No removal automation.** The `vonbox/nfc/removed` topic from the old design is gone. v1 has no on-box pause (the play/pause button was dropped — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)); pause is the Siri Remote's job, and session-end comes from the Apple TV going to sleep.
+
+#### `vonbox/state` payload (canonical)
+
+Every message on `vonbox/state` uses the same **tagged** JSON shape — never a
+bare-key form like `{"playing": "<uid>"}`. All four keys are always present
+(`uid` / `title` / `reason` are `null` when not applicable):
+
+```json
+{"state": "<NAME>", "uid": "<HEX|null>", "title": "<str|null>", "reason": "<str|null>"}
+```
+
+`<NAME>` is one of the state-vocabulary names, each mapping to a ring animation +
+buzzer cue (full table in "User feedback vocabulary"):
+
+| `state` | meaning | `reason` |
+|---|---|---|
+| `idle` | box awake, ready for a tap | `null` |
+| `loading` | tap sent, waiting for playback to start | `null` |
+| `playing` | movie confirmed playing | `null` |
+| `already_playing` | same tag re-tapped, session active (transient cue) | `null` |
+| `paused` | movie paused (e.g. Siri Remote) | `null` |
+| `standby` | Apple TV asleep / session ended | `null` |
+| `error` | unknown tag or playback failure (transient cue) | carries a short string, e.g. `"unknown_tag"` |
+
+`tap_accepted` is **not** a `vonbox/state` value — it is purely local instant
+feedback the Pico fires itself on a fresh tap, before any MQTT round-trip.
 
 #### Lessons learned in Phase 3
 
@@ -611,7 +637,7 @@ Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all
 5. **Port 1883 is the MQTT protocol, not HTTP.** Browsers can't speak to it, and `http://broker:1883` will sit there spinning. To test reachability use `mosquitto_pub`/`mosquitto_sub` or `nc -vz <host> 1883`. Worth flagging because "the URL doesn't load" was the first thing checked here and was a dead-end.
 6. **`umqtt.simple` is the right MQTT client for the Pico.** Ships with MicroPython, ~one-screen surface area, no dependencies. The `client_id` should be a unique bytes value (we're using `b"vonbox-pico"`); the broker uses it for session resumption and to disambiguate connections.
 7. **`from secrets import ...` requires `secrets.py` on the Pico's flash.** MicroPico's "Run current file on Pico" only sends the active file; imports resolve against the Pico's filesystem. Upload `secrets.py` once via "Upload current file" (or whatever your MicroPico version names it) before running any test that imports it. First place in the project where we stopped being fully ephemeral.
-8. **`umqtt.simple` is *not* frozen into the `RPI_PICO2_W` MicroPython 1.28.0 build.** `import umqtt.simple` raises `ImportError: no module named 'umqtt'` straight from a fresh flash, despite older project notes (and a fair amount of community lore) treating it as built-in. The fix is one-shot: connect to Wi-Fi, then `import mip; mip.install("umqtt.simple")` — this writes `/lib/umqtt/simple.mpy` to the Pico's flash and survives reboots. `test/install_umqtt.py` automates this; only needs to run once per fresh Pico. After install, the heartbeat publisher in `test/mqtt_hello_test.py` ran clean and the laptop subscriber received every message.
+8. **`umqtt.simple` is *not* frozen into the `RPI_PICO2_W` MicroPython 1.28.0 build.** `import umqtt.simple` raises `ImportError: no module named 'umqtt'` straight from a fresh flash, despite older project notes (and a fair amount of community lore) treating it as built-in. The fix is one-shot: connect to Wi-Fi, then `import mip; mip.install("umqtt.simple")` — this writes `/lib/umqtt/simple.mpy` to the Pico's flash and survives reboots. `test/bench/install_umqtt.py` automates this; only needs to run once per fresh Pico. After install, the heartbeat publisher in `test/bench/mqtt_hello_test.py` ran clean and the laptop subscriber received every message.
 9. **The PN532 retains in-flight I2C state across a MicroPico hot-restart.** When MicroPico's "Stop execution" interrupts a polling loop mid-frame, the chip's I2C buffer is left holding the tail of an unfinished response. The next script's first `SAMConfiguration` then *seems* to succeed at `_wait_ready` (the chip reports the leftover status byte as `0x01`) but the subsequent 7-byte ACK read NACKs with `OSError: [Errno 110] ETIMEDOUT`. Symptom is: orchestrator gets through Wi-Fi + MQTT, then immediately throws inside `PN532.init()`. **Manual fix:** unplug the Pico's USB for ~3s and re-run (full 3V3 cycle drains the chip). **Programmatic fix:** retry `SAMConfiguration` once with a 50ms gap inside `PN532.init()` — the first call's preamble forces the chip to discard the stale frame, the second call succeeds. Implemented in `lib/pn532.py` so day-to-day MicroPico use doesn't require unplugging.
 10. **`lib/` modules need to be uploaded to the Pico's flash, separately from the running `test/` script.** MicroPico's "Run current file on Pico" only ships the active file; `from pn532 import PN532` resolves against the Pico's filesystem, not the project on disk. When `lib/pn532.py` is edited, re-upload it via MicroPico's "Upload current file" before re-running the orchestrator. Same rule that already applied to `secrets.py` (lesson #7) — anything that gets `import`ed must live on flash.
 
@@ -621,16 +647,41 @@ Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all
 
 > **v1 scope (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)):** the rotary encoder (volume) and play/pause button are dropped from v1, so this phase is now output-only — LED ring, buzzer, OLED. The deferred input bits (encoder → `vonbox/volume/*` + Apple TV volume automation; button → `vonbox/button/play_pause` + pause/resume automation) move to a later iteration if the controls come back.
 
-- ✅ **NeoPixel ring — wired and bench-tested** (2026-06-08): `DIN`→GP28, `PWR`→VSYS, `GND`→shared ground (see the CLAUDE.md pin-allocation table). `test/led_ring_test.py` confirms all 24 pixels, correct colors, no flicker, with brightness capped at 25% in firmware. It needs exactly **3 wires**: `PWR`→VSYS (5V), `GND`→Pico GND, `DIN`→a PIO-capable GPIO (any GPIO on the Pico can do PIO). Leave the `DOUT` (data-out) pad empty — it's only for chaining a second ring — and note the duplicate PWR/GND pads are bussed together, so wire just one of each. Data is directional: it must enter at `DIN`. Power considerations:
+- ✅ **NeoPixel ring — wired and bench-tested** (2026-06-08): `DIN`→GP28, `PWR`→VSYS, `GND`→shared ground (see the CLAUDE.md pin-allocation table). `test/bench/led_ring_test.py` confirms all 24 pixels, correct colors, no flicker, with brightness capped at 25% in firmware. It needs exactly **3 wires**: `PWR`→VSYS (5V), `GND`→Pico GND, `DIN`→a PIO-capable GPIO (any GPIO on the Pico can do PIO). Leave the `DOUT` (data-out) pad empty — it's only for chaining a second ring — and note the duplicate PWR/GND pads are bussed together, so wire just one of each. Data is directional: it must enter at `DIN`. Power considerations:
   - 24 LEDs at 25% brightness draw ~360mA — Pico's 3V3 regulator can't handle this. Power LEDs from VSYS (raw 5V from USB) and share ground with the Pico. All-white at full brightness would pull ~1.4A, which VSYS/USB can't supply either, so cap brightness in firmware and avoid sustained all-white.
   - Use a level shifter or 330Ω series resistor on the data line if color quality looks off (5V LEDs, 3.3V signal usually works fine in practice).
-- ✅ **Buzzer — wired and bench-tested** (2026-06-08): KY-006 passive piezo on GP22 (signal) + GND, middle header pin unused, driven directly by PWM — no transistor or VCC. `test/buzzer_test.py` auditions success / error / neutral cues plus a 150 Hz→4 kHz range sweep. Final cue picks (what becomes `play_success()` / `play_error()`) are still TBD.
+- ✅ **Buzzer — wired and bench-tested** (2026-06-08): KY-006 passive piezo on GP22 (signal) + GND, middle header pin unused, driven directly by PWM — no transistor or VCC. `test/bench/buzzer_test.py` auditions success / error / neutral cues plus a 150 Hz→4 kHz range sweep. Final cue picks (what becomes `play_success()` / `play_error()`) are still TBD.
 - ⬜ Wire OLED to the same I2C bus as the PN532 (shared SDA/SCL, different I2C addresses — no conflict). MicroPython has `ssd1306` built in. *(Not yet wired — the remaining Phase 4 hardware.)*
 - MicroPython animation functions for each LED state defined in "User feedback vocabulary."
 - MicroPython tone-playing functions for each buzzer event.
 - OLED renders current state (idle / playing / paused / error / movie title).
 
-**State sync:** the Pico subscribes to `vonbox/state` MQTT topic. HA publishes state updates there (e.g. `{"state": "playing", "uid": "04A1B2C3", "title": "Toy Story"}`), and the Pico updates LEDs, OLED, and its own "session active" tracking accordingly. This is what lets the Pico tell "same tag = no-op" from "new tag = switch."
+**State sync:** the Pico subscribes to `vonbox/state` MQTT topic. HA publishes state updates there using the canonical tagged payload (e.g. `{"state": "playing", "uid": "04A1B2C3", "title": "Toy Story", "reason": null}` — see "`vonbox/state` payload (canonical)" in Phase 3), and the Pico updates LEDs, OLED, and its own "session active" tracking accordingly. This is what lets the Pico tell "same tag = no-op" from "new tag = switch."
+
+#### Testing the feedback loop away from home
+
+The full `tap → local feedback → MQTT → state → ring/buzzer` choreography can be
+exercised with **no home network, no Home Assistant, and no Apple TV** — because
+the Pico only speaks MQTT, you swap just the broker (run Mosquitto on the laptop)
+and the thing behind it (a fake HA). Pico firmware is unchanged except
+`secrets.py`. Three layers, lowest-first ("one variable at a time"):
+
+- **Layer 1 — pure hardware, no network:** `test/offline-harness/state_render_test.py` drives
+  `lib/feedback.py` through every state on a timer. Tune animations and cues here.
+- **Layer 2 — hand-publish state over MQTT:** run the laptop broker + the Pico
+  loop and `mosquitto_pub` tagged `vonbox/state` payloads by hand to confirm the
+  Pico reacts to messages off the wire.
+- **Layer 3 — the full loop:** `test/offline-harness/full_loop_test.py` (Pico: Wi-Fi + MQTT +
+  PN532; on tap fires `tap_accepted()`, publishes `vonbox/nfc/tapped`,
+  optimistically sets `loading`, renders `vonbox/state`) talking to
+  `test/offline-harness/mock_ha.py` (laptop: fake HA that subscribes to taps and publishes
+  state), over the throwaway broker config `test/offline-harness/mosquitto.dev.conf`.
+
+The harness uses the existing `ticks_ms` cooperative-loop pattern (`tick()`
+advances at most one animation frame per main-loop pass, never blocks).
+`asyncio` remains the intended approach for the final `main.py` — flagged here,
+not yet adopted. Full runbook (iPhone-hotspot 2.4 GHz gotcha, laptop setup, run
+order, troubleshooting): **`docs/testing-away-from-home.md`**.
 
 ### Phase 5: Enclosure v1 (prototype)
 
