@@ -1,8 +1,10 @@
 # ADR 0001 — Tap-and-go interaction model, not continuous presence
 
-- **Status:** Accepted
+- **Status:** Accepted (amended in part by [ADR 0002](./0002-drop-volume-knob-and-play-pause-button-for-v1.md))
 - **Date:** 2026-05-15
 - **Supersedes:** the original Tonie-Box-style interaction sketched in early SPEC.md drafts
+
+> **Amendment (2026-06-08):** [ADR 0002](./0002-drop-volume-knob-and-play-pause-button-for-v1.md) drops the physical **play/pause button** (and the rotary volume knob) from **v1**. The tap-and-go interaction model below is unchanged, but for the first build there is no on-box pause — a movie plays until a different tag is tapped or the Apple TV sleeps (i.e. "Alternative 3" below is accepted for v1). Pause is expected to return in a later iteration.
 
 ## Context
 
