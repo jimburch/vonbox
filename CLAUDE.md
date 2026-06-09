@@ -14,15 +14,22 @@ The user is the dad building this for his son Von.
 
 **Phase 1 ✅ done** — Apple TV + Plex pipeline working end-to-end via HA webhooks. A single `curl` from cold sleep wakes TV + soundbar + Apple TV, opens Plex, plays a chosen movie.
 
-**Phase 2 ▶️ in progress** — Pico detects a tag tap and prints the UID *once per tap* over USB serial.
-
-Sub-milestones for Phase 2, in order:
+**Phase 2 ✅ done** — Pico detects a tag tap and prints the UID *once per tap* over USB serial.
 
 1. ✅ **Pico alive** — MicroPython v1.28.0 flashed, MicroPico connected, `blink.py` toggles the onboard LED.
-2. **PN532 wired and talking** — I2C handshake successful, library loaded, reader responds with its firmware version. *(currently here)*
-3. **Single-shot tap detection** — Poll the PN532 at ~10Hz; when a UID is seen that wasn't present in the previous poll, print `TAPPED: <UID>` once over USB serial. Suppress further events for that UID until the tag has been absent ~2s (or a different UID is seen). No `PLACED`/`REMOVED` pair.
+2. ✅ **PN532 wired and talking** — wired over I2C on GP4 (SDA) / GP5 (SCL), DIP switches set to I2C (`SEL0=OFF, SEL1=ON`), responds at `0x24`, identifies as PN532 firmware 1.6 via raw `GetFirmwareVersion`. Bench scripts in `test/i2c_scan.py` and `test/nfc_firmware_test.py`.
+3. ✅ **Single-shot tap detection** — Polls PN532 at ~10Hz; prints `TAPPED: <UID>` exactly once per tap; suppresses re-fires until the tag is absent ≥2s. Confirmed with NTAG215 sticker `04462765C82A81`. Inline driver in `test/nfc_tap_test.py` (will extract to `lib/pn532.py` during Phase 3).
 
-Don't skip ahead. Each sub-milestone isolates one variable for debugging.
+**Phase 3 ▶️ in progress** — Pico ↔ HA via MQTT.
+
+1. ✅ **Mosquitto reachable from the laptop.** Broker on Synology at `192.168.0.123:1883` (Docker container). User `vonbox` created via `mosquitto_passwd`. `mosquitto_pub`/`mosquitto_sub` work end-to-end from Mac.
+2. ✅ **Pico on Wi-Fi.** Pico associates with SSID `Jabby`, lease `192.168.0.80`, RSSI `-42 dBm`. Credentials in gitignored `secrets.py`. Test script: `test/wifi_test.py`.
+3. ✅ **Pico → MQTT broker.** `test/mqtt_hello_test.py` publishes a heartbeat to `test/hello` every 5s; laptop `mosquitto_sub` receives each message. `umqtt.simple` is *not* frozen into the official `RPI_PICO2_W` build — install once via `test/install_umqtt.py` (calls `mip.install("umqtt.simple")`, writes to `/lib/umqtt/simple.mpy`).
+4. ✅ **`lib/pn532.py` + orchestrator.** Inline driver extracted to `lib/pn532.py` (uploaded to Pico flash); `test/nfc_to_mqtt_test.py` runs the polling + MQTT loop and publishes `{"uid": "<HEX>"}` to `vonbox/nfc/tapped`. Edge-trigger + 2s-absence cooldown preserved. Verified end-to-end with NTAG215 `04462765C82A81`.
+5. ▶️ **HA UID→rating-key automation.** First true tap-to-play moment. *(currently here)*
+6. **HA → Pico state sync.** `vonbox/state` drives Pico's session-active tracking and (eventually) the LED ring.
+
+Topic prefix: all project topics use `vonbox/...` (matches the repo name and the Mosquitto user). The MQTT user is `vonbox`; the password lives in `secrets.py` on the Pico and in the HA MQTT integration config.
 
 ## Project structure
 
@@ -75,7 +82,7 @@ Pico 2 WH  ──MQTT──▶  Mosquitto (Synology)  ◀─MQTT──▶  Home 
 Local feedback (LEDs, OLED, buzzer)                         Living room TV
 ```
 
-**Brains live in Home Assistant, not on the Pico.** The Pico is a near-dumb input device that publishes events; HA owns all logic (tag→movie mapping, Apple TV control, switching). Changing a movie mapping never requires reflashing the box. The one piece of *local* state the Pico cares about is "is there an active session for UID X?" — so it can suppress duplicate taps and produce local feedback for re-taps. That state is driven by HA via the `moviebox/state` MQTT topic.
+**Brains live in Home Assistant, not on the Pico.** The Pico is a near-dumb input device that publishes events; HA owns all logic (tag→movie mapping, Apple TV control, switching). Changing a movie mapping never requires reflashing the box. The one piece of *local* state the Pico cares about is "is there an active session for UID X?" — so it can suppress duplicate taps and produce local feedback for re-taps. That state is driven by HA via the `vonbox/state` MQTT topic.
 
 ## Phase 1 reference values (use these exact strings)
 
@@ -93,7 +100,7 @@ Local feedback (LEDs, OLED, buzzer)                         Living room TV
 - **Onboard LED is `Pin('LED', Pin.OUT)`**, NOT `Pin(25, Pin.OUT)`. The Pico 2 W's LED is on the CYW43 wireless chip, not a direct GPIO. The `Pin(25)` pattern is from the older non-W Pico and will silently do nothing on this board.
 - **No `pip install`.** Library installation = copy a `.py` file into the Pico's filesystem under `lib/`. Use MicroPico's "Upload project" or `mpremote cp`. CPython-only libraries (`paho-mqtt`, `requests`, etc.) won't work — find the MicroPython equivalent.
 - **Use `asyncio`** (built into MicroPython) for concurrency between NFC polling, MQTT, LED animations. Don't reach for `_thread` — async is the idiomatic and supported path.
-- **`umqtt.simple` is built in** and is the right MQTT client for this project.
+- **`umqtt.simple` is the right MQTT client, but is *not* frozen** into the official `RPI_PICO2_W` MicroPython 1.28.0 build. Install it once via `mip` (`test/install_umqtt.py` does this — connects to Wi-Fi, calls `mip.install("umqtt.simple")`, which writes `/lib/umqtt/simple.mpy` to flash). After that, `from umqtt.simple import MQTTClient` works forever on this Pico. If a Pico ever gets reflashed, re-run the installer.
 - **Timing:** `time.sleep_ms()` and `time.ticks_ms()` for short waits, not `time.sleep(0.1)`.
 - **Memory:** ~520 KB SRAM on the RP2350. Avoid building large strings in tight loops; use `bytearray` and memoryview.
 - **`secrets.py`** stores WiFi/MQTT credentials and is gitignored. Never hardcode credentials in tracked files.
