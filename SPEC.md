@@ -1,6 +1,7 @@
 ---
 created: 2026-04-20, 3:48 PM
-updated: 2026-05-15tags:
+updated: 2026-06-08
+tags:
 ---
 # NFC Movie Box for Von — Project Plan
 
@@ -36,7 +37,7 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 > **Tooling note:** switched from Thonny (mentioned in Phase 2 plan below) to **VS Code + MicroPico extension** — same MicroPython workflow, fits the existing editor. Phase 2 instructions still apply, just substitute MicroPico's "Run current file on Pico" for Thonny's run button.
 
 **Deferred from Phase 1** (intentional — will fold into later work):
-- Pause webhook — now folds into the Phase 4 play/pause button automation (was previously planned to fold into the Phase 3 `nfc/removed` automation, which has since been struck — see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md)).
+- Pause webhook — dropped from v1 along with the play/pause button (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)). v1 has no on-box pause; the Siri Remote covers it in the meantime. (It was previously planned to fold into the Phase 3 `nfc/removed` automation, then the Phase 4 button automation — both now gone; see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md).)
 - Tailscale remote access — works any time, not blocking anything.
 
 ---
@@ -50,9 +51,9 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 5. Von can walk away. The movie keeps playing. No tag has to stay near the box.
 6. **If Von taps the same tag again while Toy Story is still playing/paused:** the box ignores the tap (the session is already active for that UID) and gives a soft "already playing" cue (gentle chime + brief LED pulse). No new HA event.
 7. **If Von taps a different tag (e.g. Cars) while Toy Story is playing:** HA switches movies immediately — stops Toy Story, starts Cars. Plex's native resume position remembers where Toy Story was for the next time it's tapped.
-8. **Pause/resume:** Von presses the physical play/pause button on the box. Pure toggle: playing → paused, paused → playing. If nothing is playing, the box gives a soft error cue and does nothing.
+8. **Pause (v1):** the box has no pause control in v1 — a movie plays until a different tag is tapped or the Apple TV goes to sleep. The Siri Remote can still pause/resume in the meantime. (The play/pause button was dropped from v1 — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md).)
 9. **Session ends** when the Apple TV goes back to sleep (HA detects this and tells the box). After session-end, the next tap of any tag — including the same one that started the previous session — is a fresh start (Plex's own resume window still applies for picking up mid-movie inside Plex's memory).
-10. Volume knob on box → sends Apple TV volume commands → soundbar adjusts via CEC.
+10. **Volume (v1):** adjusted with the Siri Remote / soundbar through the existing Apple TV → HDMI-CEC path. There is no volume knob on the box in v1 (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)).
 
 ---
 
@@ -63,11 +64,10 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 │  Movie Box      │      │  Raspberry Pi 4  │      │  Apple TV       │
 │  ─ Pico 2 WH    │◀───▶│  ─ Home Assistant│─────▶│  ─ Plex app     │
 │  ─ PN532 NFC    │ MQTT │  ─ pyatv         │pyatv │  ─ Soundbar via │
-│  ─ Rotary enc.  │      │  ─ Plex integr.  │      │    HDMI-CEC     │
-│  ─ P/P button   │      │  ─ State machine │      │                 │
-│  ─ NeoPixel ring│      │  ─ Cloudflared   │      │                 │
-│  ─ Buzzer       │      │  (existing)      │      │                 │
-│  ─ OLED display │      │                  │      │                 │
+│  ─ NeoPixel ring│      │  ─ Plex integr.  │      │    HDMI-CEC     │
+│  ─ Buzzer       │      │  ─ State machine │      │                 │
+│  ─ OLED display │      │  ─ Cloudflared   │      │                 │
+│                 │      │  (existing)      │      │                 │
 └─────────────────┘      └──────────────────┘      └─────────────────┘
                                   │
                                   │ Plex API
@@ -92,10 +92,10 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 - **Brains live in Home Assistant, not on the box.** The Pico is a dumb input device that reads NFC and publishes events. HA owns all logic (tag-to-movie mapping, Apple TV control, switching between movies). This means changing a movie mapping doesn't require reflashing the box.
 - **Tap-and-go, not continuous presence.** A tag near the reader fires *once*, then the tag goes away. The box does not require any object to remain on or near it for a movie to keep playing. This is the central design pivot away from the Tonie-Box model. See [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md).
 - **Plex handles resume automatically.** When HA stops one movie and switches to another (or when a movie is paused for a long time and the Apple TV sleeps), Plex's own resume position is what brings Von back to where he left off the next time that movie's tag is tapped. The box does not manage resume timers.
-- **Volume passes through Apple TV → HDMI-CEC → soundbar.** Same path as the existing Apple TV remote.
+- **Volume passes through Apple TV → HDMI-CEC → soundbar.** Same path as the existing Apple TV remote. v1 has no volume control on the box — the Siri Remote owns volume (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)).
 - **NFC polls at ~10Hz but events are edge-triggered.** The Pico publishes a single `tapped` event the first time a UID is read; it then suppresses further events for that UID until the tag has been *absent* for ~2s (or a different UID appears). Von can mash the tag against the box repeatedly; HA sees one event.
 - **The Pico tracks "session active" state per-UID so it can give local feedback.** While a UID's session is active, re-reads of the same UID produce a *local* "already playing" cue (chime + LED pulse) and do not generate HA events. The Pico learns session-end either by HA pushing state via MQTT (preferred — Apple TV state changes) or by its own timeout.
-- **MQTT for bidirectional Pico ↔ HA communication.** Event-driven, low-overhead. The Pico publishes events (tapped, volume, play_pause); HA publishes state updates back (playing, paused, standby, error) so the Pico can update LEDs, the OLED, and its own session-active state.
+- **MQTT for bidirectional Pico ↔ HA communication.** Event-driven, low-overhead. The Pico publishes events (tapped); HA publishes state updates back (playing, paused, standby, error) so the Pico can update LEDs, the OLED, and its own session-active state.
 - **Pico is immediately responsive**, HA confirms state. Local feedback (instant beep/LED on tap acceptance) fires on the Pico the moment the read succeeds; HA-confirmed feedback (LED ring transitioning to "playing") follows once the movie is actually playing on the Apple TV.
 
 ---
@@ -104,10 +104,10 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 
 ### From the Inventr "30 Days Lost in Space" Arduino kit (already owned)
 
-- Rotary encoder module (KY-040 style)
+- Rotary encoder module (KY-040 style) — *not used in v1 (volume knob dropped — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)); kept in the parts bin for a later iteration*
 - Passive buzzer module (can play actual tones via PWM)
 - 0.96" OLED display (SSD1306, I2C)
-- Tactile buttons
+- Tactile buttons — *not used in v1 (play/pause button dropped — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)); kept for a later iteration*
 - Breadboard, jumper wires, resistor assortment
 - LEDs (for bench testing)
 - HERO board / Arduino Uno clone (for bench-testing components before wiring to Pi)
@@ -120,7 +120,7 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 | Raspberry Pi Pico 2 WH (with pre-soldered headers) | $7 | Wi-Fi + BT, RP2350 chip, low power. Pico WH (RP2040) is an acceptable fallback if 2 WH is out of stock. |
 | USB-A to micro-USB cable | $3 | For programming + power |
 | PN532 NFC module (I2C, with headers) | $10 | HiLetgo or Adafruit |
-| NeoPixel ring, WS2812B, 16 LEDs | $8 | For the illuminated status ring on top of the box |
+| NeoPixel ring, WS2812, 24 LEDs (DIYMalls) | $8 | For the illuminated status ring on top of the box. Went with the larger 24-LED ring over the original 16 — proportionally more current draw (see Phase 4 power note). |
 | NTAG215 stickers, 50-pack | $10 | Any brand. Will be embedded into / stuck onto whatever physical token Von taps (cards, 3D-printed coins, small figurines, etc.) |
 | Mounting hardware (M2.5 screws, heat-set inserts) | $10 | For enclosure assembly |
 | **Subtotal (Phases 1–4)** | **~$48** | Enough to prototype everything |
@@ -167,11 +167,11 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 
 - A clearly-marked tap zone (printed icon or color marker) where the NFC antenna sits directly underneath, so Von learns where to aim.
 - PN532 NFC antenna centered directly under the tap zone, as close to the surface as possible (read range is short — millimeters to a few cm with NTAG215 stickers).
-- NeoPixel 16-LED ring on top, around or near the tap zone, diffused through translucent PLA — the primary visual status surface.
-- Rotary encoder through the top surface (volume).
-- Play/pause button (tactile, big and easy for a toddler thumb).
+- NeoPixel 24-LED ring on top, around or near the tap zone, diffused through translucent PLA — the primary visual status surface.
 - OLED display in a window on the front face (movie title, parent-readable error messages).
 - Buzzer vented for clear sound.
+
+> v1 has no rotary encoder (volume knob) and no play/pause button — those were dropped to keep the first build simple. See [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md). The top surface for v1 is just the tap zone + LED ring; volume and pause are handled by the Siri Remote.
 
 **Materials:**
 
@@ -195,7 +195,7 @@ The LED ring is the **primary visual status surface**. States below are listed i
 | Already playing (same tag re-tapped) | Tag matches the currently active session — local no-op | Single soft pulse | Same as current state | brief +10% |
 | Loading | HA event sent, waiting for Apple TV to start playing | Chase (single LED runs the ring) | Blue | ~30% |
 | Playing | HA confirms movie is playing | Steady solid | Green | ~20% |
-| Paused | Button pressed during playback | Slow breathing | Amber | ~15% |
+| Paused | HA reports the movie paused (e.g. via the Siri Remote — v1 has no on-box pause) | Slow breathing | Amber | ~15% |
 | Standby | Apple TV is asleep (session ended) — box still on | Very slow breathing | Soft warm white | ~5% |
 | Unknown tag / error | UID with no mapping, or HA reports an error | 3 flashes then back to prior state | Red | ~40% |
 
@@ -204,10 +204,9 @@ The LED ring is the **primary visual status surface**. States below are listed i
 - **Tap accepted (new movie):** rising two-note chime ("got it")
 - **Tap rejected, already playing:** single soft mid-note ("yeah I know")
 - **Tap unknown UID:** soft low descending tone ("hmm?")
-- **Play/pause button — playing → paused:** descending two-note chime
-- **Play/pause button — paused → playing:** rising two-note chime (same as tap-accepted is fine)
-- **Play/pause button — nothing to act on:** soft low tone (same as unknown-UID error tone is fine)
 - **Keep it musical and gentle** — a 3.5-year-old will hear these a lot.
+
+(v1 has no play/pause button, so there are no pause/resume button cues — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md).)
 
 ### OLED display
 
@@ -219,13 +218,14 @@ The LED ring is the **primary visual status surface**. States below are listed i
 
 Useful for Von (magic factor), useful for dad (debugging).
 
-### Play/pause button behavior
+### Pause / restart behavior (v1)
 
-- **Press while playing:** pause (HA fires `media_player.media_pause`).
-- **Press while paused:** resume (HA fires `media_player.media_play`).
-- **Press while idle / standby (nothing playing):** do nothing, soft error beep.
-- **Long press (3s):** reserved for future use (parental override, box reset, etc.) — not implemented in Phase 4.
+v1 has **no on-box pause control** — the play/pause button was dropped to keep the first build simple (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)).
+
+- **Pause/resume:** use the Siri Remote. The box never originates a pause; if a movie is paused externally, HA reports it and the LED ring shows the "Paused" state.
+- **Stopping a movie:** tap a different tag (switches movies) or let the Apple TV go to sleep (ends the session).
 - **No restart-from-beginning behavior.** If Von wants to restart, he taps the tag again after the current session has ended (Apple TV asleep). Within an active session, the only way to start a movie over is to tap a different tag and then tap the original tag back — which Plex's resume window will still bias toward picking up mid-movie, so true "restart from beginning" is a Phase 6+ feature if it turns out to matter.
+- **A future iteration may reintroduce a button** (pause/resume, and possibly a long-press for parental override / box reset). It is out of scope for v1.
 
 ---
 
@@ -238,8 +238,7 @@ Useful for Von (magic factor), useful for dad (debugging).
 - **PN532 NFC reader** with **NTAG215 stickers**
 - **Tap-and-go interaction**: edge-triggered single read per UID, ~2s absence-based cooldown before the same UID can re-fire (see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md))
 - **Underlying poll rate ~10Hz** — gives ~100ms tap responsiveness; the polling itself is unchanged, only the event semantics shifted
-- **Rotary encoder** on PIO for volume (better than a pot for infinite rotation)
-- **Physical play/pause button** for pause/resume (no removal-triggers-pause anymore)
+- **No volume knob and no play/pause button in v1** — both dropped to keep the first build simple (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)). Volume and pause are handled by the Siri Remote; either control may return in a later iteration.
 - **NeoPixels driven via PIO**, running at 25% brightness (safely powered from Pico's VSYS rail)
 - **One tag per movie** (simple mental model)
 - **No on-box resume timer.** Plex's native resume position handles "pick up where you left off"; HA does not manage a 1-hour clear cycle anymore.
@@ -475,11 +474,11 @@ This is the webhook the NFC trigger will eventually call. It has to handle the f
 
 **✅ Checkpoint:** Single `curl` plays the movie from a fully asleep Apple TV.
 
-#### Step 7: Pause webhook (deferred — will fold into Phase 4)
+#### Step 7: Pause webhook (dropped from v1)
 
-This was originally a separate Phase 1 step. Skipping it standalone — when the play/pause button automation is built in Phase 4, it'll call `media_player.media_pause` (or `.media_play`) on the Plex client entity, which covers the same need.
+This was originally a separate Phase 1 step, then planned to fold into the Phase 4 play/pause button automation. With v1 dropping the play/pause button entirely (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)), **v1 has no pause path at all** — pause is handled by the Siri Remote. There is no pause webhook to build for v1.
 
-(Originally this deferral pointed at the Phase 3 `nfc/removed` automation. That automation no longer exists — see [ADR 0001](../docs/adr/0001-tap-and-go-instead-of-continuous-presence.md).)
+(The deferral chain: originally this pointed at the Phase 3 `nfc/removed` automation, which was struck when the interaction model changed — see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md) — then at the Phase 4 button automation, now also dropped per ADR 0002.)
 
 If you want a manual pause for testing in the meantime, it's a one-action automation:
 ```yaml
@@ -509,7 +508,7 @@ If you want a manual pause for testing in the meantime, it's a one-action automa
 - [x] Plex integration connected, library visible
 - [x] Plex-on-AppleTV `media_player` entity exists
 - [x] `curl` webhook plays the movie from a fully asleep Apple TV (one command, full cold start)
-- [ ] Pause webhook — *deferred to Phase 4 (rolls into play/pause button automation)*
+- [x] Pause webhook — *dropped from v1 (no play/pause button — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)); Siri Remote covers pause*
 - [ ] Tailscale set up — *optional, no blocker*
 
 #### Phase 1 outcomes — values to reuse in Phase 3
@@ -601,7 +600,7 @@ Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all
   - Apple TV `paused` → `state: paused, uid: <whichever>`
   - Apple TV `standby` / `off` / `idle` for >N seconds → `state: standby` (this is what tells the Pico the session has ended)
 
-**No removal automation.** The `vonbox/nfc/removed` topic from the old design is gone. Pause comes from the play/pause button (Phase 4); session-end comes from Apple TV going to sleep.
+**No removal automation.** The `vonbox/nfc/removed` topic from the old design is gone. v1 has no on-box pause (the play/pause button was dropped — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)); pause is the Siri Remote's job, and session-end comes from the Apple TV going to sleep.
 
 #### Lessons learned in Phase 3
 
@@ -616,20 +615,17 @@ Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all
 9. **The PN532 retains in-flight I2C state across a MicroPico hot-restart.** When MicroPico's "Stop execution" interrupts a polling loop mid-frame, the chip's I2C buffer is left holding the tail of an unfinished response. The next script's first `SAMConfiguration` then *seems* to succeed at `_wait_ready` (the chip reports the leftover status byte as `0x01`) but the subsequent 7-byte ACK read NACKs with `OSError: [Errno 110] ETIMEDOUT`. Symptom is: orchestrator gets through Wi-Fi + MQTT, then immediately throws inside `PN532.init()`. **Manual fix:** unplug the Pico's USB for ~3s and re-run (full 3V3 cycle drains the chip). **Programmatic fix:** retry `SAMConfiguration` once with a 50ms gap inside `PN532.init()` — the first call's preamble forces the chip to discard the stale frame, the second call succeeds. Implemented in `lib/pn532.py` so day-to-day MicroPico use doesn't require unplugging.
 10. **`lib/` modules need to be uploaded to the Pico's flash, separately from the running `test/` script.** MicroPico's "Run current file on Pico" only ships the active file; `from pn532 import PN532` resolves against the Pico's filesystem, not the project on disk. When `lib/pn532.py` is edited, re-upload it via MicroPico's "Upload current file" before re-running the orchestrator. Same rule that already applied to `secrets.py` (lesson #7) — anything that gets `import`ed must live on flash.
 
-### Phase 4: Rotary encoder + play/pause button + NeoPixel ring + buzzer + OLED (1–2 evenings)
+### Phase 4: NeoPixel ring + buzzer + OLED (1–2 evenings)
 
 **Goal:** Full feedback vocabulary working on the bench-breadboarded box.
 
-- Wire rotary encoder using **PIO** (the Pico's killer feature for encoders — zero missed pulses). Publishes `vonbox/volume/up` or `vonbox/volume/down` on detent changes.
-- Wire the play/pause button (with debouncing) → publishes `vonbox/button/play_pause`.
-- HA automations:
-  - Volume up/down → send Apple TV volume commands.
-  - `vonbox/button/play_pause` → if Apple TV `state == 'playing'`, fire `media_player.media_pause` on the Plex client entity; if `state == 'paused'`, fire `media_player.media_play`; otherwise no-op (Pico already produces the error beep locally).
-- Wire NeoPixel ring data pin to a PIO-capable GPIO (any GPIO on the Pico can do PIO). Power considerations:
-  - 16 LEDs at 25% brightness draw ~240mA — Pico's 3V3 regulator can't handle this. Power LEDs from VSYS (raw 5V from USB) and share ground with the Pico.
+> **v1 scope (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)):** the rotary encoder (volume) and play/pause button are dropped from v1, so this phase is now output-only — LED ring, buzzer, OLED. The deferred input bits (encoder → `vonbox/volume/*` + Apple TV volume automation; button → `vonbox/button/play_pause` + pause/resume automation) move to a later iteration if the controls come back.
+
+- ✅ **NeoPixel ring — wired and bench-tested** (2026-06-08): `DIN`→GP28, `PWR`→VSYS, `GND`→shared ground (see the CLAUDE.md pin-allocation table). `test/led_ring_test.py` confirms all 24 pixels, correct colors, no flicker, with brightness capped at 25% in firmware. It needs exactly **3 wires**: `PWR`→VSYS (5V), `GND`→Pico GND, `DIN`→a PIO-capable GPIO (any GPIO on the Pico can do PIO). Leave the `DOUT` (data-out) pad empty — it's only for chaining a second ring — and note the duplicate PWR/GND pads are bussed together, so wire just one of each. Data is directional: it must enter at `DIN`. Power considerations:
+  - 24 LEDs at 25% brightness draw ~360mA — Pico's 3V3 regulator can't handle this. Power LEDs from VSYS (raw 5V from USB) and share ground with the Pico. All-white at full brightness would pull ~1.4A, which VSYS/USB can't supply either, so cap brightness in firmware and avoid sustained all-white.
   - Use a level shifter or 330Ω series resistor on the data line if color quality looks off (5V LEDs, 3.3V signal usually works fine in practice).
-- Wire buzzer to a PWM-capable GPIO (any Pico GPIO supports PWM).
-- Wire OLED to the same I2C bus as the PN532 (shared SDA/SCL, different I2C addresses — no conflict). MicroPython has `ssd1306` built in.
+- ✅ **Buzzer — wired and bench-tested** (2026-06-08): KY-006 passive piezo on GP22 (signal) + GND, middle header pin unused, driven directly by PWM — no transistor or VCC. `test/buzzer_test.py` auditions success / error / neutral cues plus a 150 Hz→4 kHz range sweep. Final cue picks (what becomes `play_success()` / `play_error()`) are still TBD.
+- ⬜ Wire OLED to the same I2C bus as the PN532 (shared SDA/SCL, different I2C addresses — no conflict). MicroPython has `ssd1306` built in. *(Not yet wired — the remaining Phase 4 hardware.)*
 - MicroPython animation functions for each LED state defined in "User feedback vocabulary."
 - MicroPython tone-playing functions for each buzzer event.
 - OLED renders current state (idle / playing / paused / error / movie title).
@@ -645,13 +641,13 @@ Note on network topology: HA on Pi, Mosquitto on Synology, Pico on Wi-Fi — all
 - Move from breadboard to a **Pico-specific protoboard** (Pimoroni "Proto Board for Pico" or Adafruit "Perma-Proto for Pico", ~$3–5). These have the Pico's pinout labeled on the silkscreen so the layout is almost mechanical to transfer.
 - Solder **female header sockets** onto the protoboard where the Pico's pins will go. The Pico 2 WH then plugs into these sockets — same as it did on the breadboard, just permanent.
 - This keeps the Pico **removable and reprogrammable** without desoldering — critical for a toddler-facing device where you'll want to tweak firmware, debug Wi-Fi, or swap in a new Pico if one fries.
-- Solder the rest of the connections (PN532 wires, NeoPixel ring, encoder, button, buzzer, OLED) to the protoboard with strain relief. Use JST or screw-terminal connectors where practical so individual components can be unplugged for maintenance.
+- Solder the rest of the connections (PN532 wires, NeoPixel ring, buzzer, OLED) to the protoboard with strain relief. Use JST or screw-terminal connectors where practical so individual components can be unplugged for maintenance. *(No encoder or button in v1 — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md).)*
 - This trades ~15mm of vertical space (for the socket stack) for massively better reliability and serviceability. Not a meaningful tradeoff in a box this size.
 
 **Enclosure design:**
 
 - Design in Fusion 360 / OnShape / Tinkercad
-- Box holds: Pico 2 WH on protoboard, PN532 under top surface (as close to the surface as possible — read range is short), rotary encoder through top, play/pause button through top, NeoPixel ring just below top surface around the tap zone, OLED window on front face, USB cable out back for power, buzzer vented
+- Box holds: Pico 2 WH on protoboard, PN532 under top surface (as close to the surface as possible — read range is short), NeoPixel ring just below top surface around the tap zone, OLED window on front face, USB cable out back for power, buzzer vented. *(No rotary encoder or play/pause button in v1 — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md); the top surface is just the tap zone + LED ring.)*
 - The Pico is tiny (~21mm × 51mm) and runs cool — no heat management or ventilation needed
 - **Tag token v1:** laminated cards with movie poster art and an NTAG215 sticker on the back. Cheapest, fastest, blog-post style. Lets you iterate on the box without committing to a 3D-printed token form.
 - **Tag token v2+:** 3D-printed coins or mini figurines with a recess for the NTAG215 sticker. No magnet holes, no ferrite pocket — those were only needed for the old magnetic-mating design.
@@ -708,7 +704,7 @@ None currently. All clarifying questions have been resolved. New questions will 
    Note: Mosquitto is a much simpler image than HA and Synology Docker handles it fine. If it happens to also fail, fall back to running Mosquitto on the Pi alongside HA.
 4. **While waiting: install Tailscale on the Pi** (via `curl | sh` install script) + phone + laptop, so you can access HA privately from anywhere. Webhooks and MQTT still use LAN IPs — Tailscale is only for your browser.
 5. **When parts arrive: Phase 2 → 3 → 4 → 5** in sequence
-6. **Keep the Arduino/HERO board on the bench** throughout for bench-testing components (buzzer tones, LED patterns, encoder behavior) before committing to Pico wiring — fastest dev loop for "does this component work?" is still an Arduino sketch
+6. **Keep the Arduino/HERO board on the bench** throughout for bench-testing components (buzzer tones, LED patterns) before committing to Pico wiring — fastest dev loop for "does this component work?" is still an Arduino sketch
 
 ---
 
