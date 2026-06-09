@@ -7,7 +7,7 @@
 # Pre-flight:
 #   - secrets.py must be on the Pico's flash (already there from sub-milestone 3.2).
 #   - umqtt.simple must be on the Pico's flash under /lib (install via
-#     test/install_umqtt.py if missing).
+#     test/bench/install_umqtt.py if missing).
 #   - lib/pn532.py must be uploaded to the Pico via MicroPico "Upload current
 #     file" — otherwise `from pn532 import PN532` will ImportError.
 #
