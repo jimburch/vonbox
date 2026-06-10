@@ -1,15 +1,34 @@
 alias: Play movie from NFC tap
-description: Tap-to-play — look up UID from vonbox/nfc/tapped and run the Phase 1 cold-start sequence parameterised by Plex rating key.
+description: >-
+  Tap-to-play. Triggered by vonbox/nfc/tapped, looks up the Plex rating key from
+  a UID->rating-key mapping, and drives the Apple TV to the mapped movie under
+  ALL starting conditions: cold (everything asleep), warm-but-elsewhere (Apple TV
+  on, not playing this movie), and already-playing (re-tap is a soft no-op, never
+  a restart). Publishes vonbox/state at each branch so the box's LED ring/buzzer
+  reflect what happened (Phase 3 step 6). Builds on the Phase 1 cold-start
+  sequence and its hard-won fixes — see SPEC.md lessons #6 (Companion warm-up),
+  #7 (content_id is a weak check), #8 (no silent continue_on_timeout) and #9
+  (event-driven retry, not fixed delays).
 triggers:
   - trigger: mqtt
     topic: vonbox/nfc/tapped
 variables:
   # Bootstrap mapping. Add new tags here as their figurines arrive.
+  # Two flat maps (not one nested map) on purpose: HA's variables: block renders
+  # each value as a template, and flat string->string maps sidestep the native
+  # complex-type quirks you hit returning dicts from a template. Keep a UID in
+  # BOTH maps when you add a tag.
   uid_to_rating_key:
     "04462765C82A81": "190"   # The Super Mario Bros. Movie
+  uid_to_title:
+    "04462765C82A81": "The Super Mario Bros. Movie"
   uid: "{{ trigger.payload_json.uid | default('') }}"
   rating_key: "{{ uid_to_rating_key.get(uid, '') }}"
+  title: "{{ uid_to_title.get(uid, none) }}"
 actions:
+  # --- Guard 1: unknown tag ------------------------------------------------
+  # No rating key for this UID. Log for the HA logbook AND tell the box so it
+  # can flash the red error cue. Transient state -> not retained.
   - if:
       - condition: template
         value_template: "{{ rating_key == '' }}"
@@ -18,7 +37,44 @@ actions:
         data:
           level: warning
           message: "vonbox: unknown UID '{{ uid }}' — ignoring tap"
+      - action: mqtt.publish
+        data:
+          topic: vonbox/state
+          payload: "{{ {'state':'error','uid':uid,'title':none,'reason':'unknown_tag'} | to_json }}"
       - stop: Unknown UID
+
+  # --- Guard 2: this movie is already the active session -------------------
+  # Re-tap of the movie that's already playing OR paused -> soft no-op. We read
+  # the LIVE Plex entity (ground truth), not a tracked variable, so it's correct
+  # even if the box's local session state drifted. Requiring state in
+  # playing/paused (not just a content_id match) avoids the lesson #7 trap where
+  # a stale media_content_id lingers after Plex actually stopped. Crucially this
+  # returns BEFORE any turn_on/select_source/play_media, so a re-tap can never
+  # restart the movie (the lesson #9 failure mode).
+  - if:
+      - condition: template
+        value_template: >-
+          {{ states('media_player.plex_plex_for_apple_tv_apple_tv') in ['playing', 'paused']
+             and state_attr('media_player.plex_plex_for_apple_tv_apple_tv', 'media_content_id') | string == rating_key }}
+    then:
+      - action: mqtt.publish
+        data:
+          topic: vonbox/state
+          payload: "{{ {'state':'already_playing','uid':uid,'title':title,'reason':none} | to_json }}"
+      - stop: Already playing this movie
+
+  # --- Play / switch sequence (cold-start AND warm-but-elsewhere) -----------
+  # Everything below is identical whether the Apple TV was asleep or on but
+  # showing something else: turn_on is a no-op when already awake, select_source
+  # is a no-op when Plex is already foregrounded, and play_media switches movies.
+
+  # Optimistic loading cue the instant we commit to playing — lets the ring show
+  # its loading animation through the (multi-second) wake + launch. Transient.
+  - action: mqtt.publish
+    data:
+      topic: vonbox/state
+      payload: "{{ {'state':'loading','uid':uid,'title':title,'reason':none} | to_json }}"
+
   - target:
       entity_id: media_player.living_room
     action: media_player.turn_on
@@ -33,6 +89,9 @@ actions:
     data:
       source: Plex
     action: media_player.select_source
+  # No continue_on_timeout here on purpose (lesson #8): if Plex never reaches a
+  # usable state, fail loudly into the logbook rather than silently calling
+  # play_media into the void.
   - wait_template: >-
       {{ states('media_player.plex_plex_for_apple_tv_apple_tv') in ['idle',
       'paused', 'playing'] }}
@@ -40,7 +99,7 @@ actions:
   - delay: "00:00:08"
   # Warm up the Plex Companion session — sending any command forces the
   # control channel to re-establish before play_media. Without this, a stale
-  # session will silently swallow the play_media call.
+  # session will silently swallow the play_media call (lesson #6).
   - target:
       entity_id: media_player.plex_plex_for_apple_tv_apple_tv
     action: media_player.media_play
@@ -57,7 +116,7 @@ actions:
         # Wait up to 15s for Plex to actually start playing. Only retry on
         # genuine timeout — a fixed delay was too short and caused duplicate
         # play_media calls when state hadn't flipped yet, which Plex
-        # interpreted as "restart the movie."
+        # interpreted as "restart the movie" (lesson #9).
         - wait_template: >-
             {{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing'
             and state_attr('media_player.plex_plex_for_apple_tv_apple_tv',
@@ -71,8 +130,22 @@ actions:
                 and state_attr('media_player.plex_plex_for_apple_tv_apple_tv',
                 'media_content_id') | string == rating_key }}
           then:
+            # Confirmed playing the right movie -> sustained state, retained so a
+            # box that (re)connects mid-movie immediately shows 'playing'.
+            - action: mqtt.publish
+              data:
+                topic: vonbox/state
+                retain: true
+                payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
             - stop: Movie is playing
       until:
         - condition: template
           value_template: "{{ repeat.index >= 3 }}"
+
+  # --- Fell through all retries -> playback genuinely failed ---------------
+  # (Only reached if every attempt's wait_template timed out without 'playing'.)
+  - action: mqtt.publish
+    data:
+      topic: vonbox/state
+      payload: "{{ {'state':'error','uid':uid,'title':title,'reason':'playback_failed'} | to_json }}"
 mode: single

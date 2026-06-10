@@ -49,7 +49,8 @@ PLAYBACK_DELAY_S = 2.5
 
 # UID -> (plex_rating_key, title). Seeded with the one known-good test tag.
 # The real HA holds this as a UID->rating-key map (SPEC.md Phase 3); we carry
-# the title too so the OLED has something to show.
+# the title too because it's a required key in the canonical vonbox/state
+# payload (and a future display would render it — see ADR 0003).
 MOVIE_TABLE = {
     "04462765C82A81": ("190", "The Super Mario Bros. Movie"),
 }

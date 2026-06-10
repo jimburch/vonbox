@@ -6,7 +6,7 @@ This is the always-on context. The full project plan, rationale, and lessons lea
 
 A device that lets a 3.5-year-old start movies on the living room TV by **tapping** an NFC-tagged object (card, coin, mini character — form factor TBD) against a small box. NFC identifies the tag; Home Assistant translates that into Apple TV + Plex commands.
 
-The interaction model is **tap-and-go**, not continuous-presence-on-the-box like a Tonie Box. The tag is brought to the reader, fires once, and then goes away. The movie keeps playing whether the tag is nearby or not. **v1 has no on-box controls beyond the tap** — the volume knob and play/pause button were dropped to keep the first build simple; volume and pause are the Siri Remote's job. See [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md) (interaction model) and [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md) (v1 scope).
+The interaction model is **tap-and-go**, not continuous-presence-on-the-box like a Tonie Box. The tag is brought to the reader, fires once, and then goes away. The movie keeps playing whether the tag is nearby or not. **v1 has no on-box controls beyond the tap** — the volume knob and play/pause button were dropped to keep the first build simple; volume and pause are the Siri Remote's job. The OLED was later cut too, so v1 output is the LED ring + buzzer only. See [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md) (interaction model), [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md) (controls cut), and [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md) (OLED cut).
 
 The user is the dad building this for his son Von.
 
@@ -26,18 +26,16 @@ The user is the dad building this for his son Von.
 2. ✅ **Pico on Wi-Fi.** Pico associates with SSID `Jabby`, lease `192.168.0.80`, RSSI `-42 dBm`. Credentials in gitignored `secrets.py`. Test script: `test/bench/wifi_test.py`.
 3. ✅ **Pico → MQTT broker.** `test/bench/mqtt_hello_test.py` publishes a heartbeat to `test/hello` every 5s; laptop `mosquitto_sub` receives each message. `umqtt.simple` is *not* frozen into the official `RPI_PICO2_W` build — install once via `test/bench/install_umqtt.py` (calls `mip.install("umqtt.simple")`, writes to `/lib/umqtt/simple.mpy`).
 4. ✅ **`lib/pn532.py` + orchestrator.** Inline driver extracted to `lib/pn532.py` (uploaded to Pico flash); `test/bench/nfc_to_mqtt_test.py` runs the polling + MQTT loop and publishes `{"uid": "<HEX>"}` to `vonbox/nfc/tapped`. Edge-trigger + 2s-absence cooldown preserved. Verified end-to-end with NTAG215 `04462765C82A81`.
-5. ▶️ **HA UID→rating-key automation.** First true tap-to-play moment. *(currently here)*
-6. **HA → Pico state sync.** `vonbox/state` drives Pico's session-active tracking and (eventually) the LED ring.
+5. ✅ **HA UID→rating-key automation.** `test/home-assistant/play_from_tap.yaml`: triggers on `vonbox/nfc/tapped`, maps UID→rating key (inline `variables:` mapping — add new tags there), runs the Phase 1 cold-start sequence. Includes the Plex Companion warm-up and the retry-only-on-timeout pattern (spec.md Phase 3 lessons #11–#12). Verified: tapping NTAG215 `04462765C82A81` plays Super Mario (rating key `190`) from cold sleep. Unknown UIDs log a warning and stop — publishing the `error` state arrives with step 6.
+6. ▶️ **HA → Pico state sync.** `vonbox/state` drives Pico's session-active tracking and the LED ring. Pico side already proven against the mock HA (`test/offline-harness/full_loop_test.py` + `lib/feedback.py`); the real-HA publishing automations are the new work. *(currently here)*
 
 Topic prefix: all project topics use `vonbox/...` (matches the repo name and the Mosquitto user). The MQTT user is `vonbox`; the password lives in `secrets.py` on the Pico and in the HA MQTT integration config.
 
-**Phase 4 ▶️ output hardware bench-tested early** — both v1 *output* devices are on the breadboard and verified with standalone scripts, ahead of the remaining Phase 3 integration and the full feedback vocabulary. (Pins for both are in the **Pico pin allocation** table below.)
+**Phase 4 ▶️ all v1 output hardware bench-tested** — the LED ring and buzzer are on the breadboard and verified with standalone scripts; the OLED was cut from v1 ([ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)), so no Phase 4 hardware remains. (Pins for both are in the **Pico pin allocation** table below.)
 
 1. ✅ **LED ring lit and animating.** 24-px WS2812 ring, `DIN`→GP28, `PWR`→VSYS, `GND`→shared rail. `test/bench/led_ring_test.py` cycles solid colors (white/yellow/red/blue) plus wipe/comet/rainbow/chase/breathe — all 24 pixels correct, no flicker. Brightness is capped at 25% in firmware (`BRIGHTNESS = 0.25`) as a hard current-safety limit; all-white at full tilt (~1.4 A) exceeds what VSYS/USB can supply.
 2. ✅ **Buzzer playing tones.** KY-006 passive piezo, `S`→GP22, `−`→GND (middle header pin unused), driven directly by PWM — no transistor or VCC. `test/bench/buzzer_test.py` auditions a menu of success / error / neutral cues plus a 150 Hz→4 kHz range sweep. Which cues become `play_success()` / `play_error()` is still TBD.
-3. **OLED** — not yet wired; shares the PN532 I2C bus (GP4/GP5). The remaining Phase 4 hardware.
-
-Still Phase-4-pending: per-state LED animations + buzzer cues bound to `vonbox/state`, and the OLED.
+Still Phase-4-pending: binding `lib/feedback.py` to the real `vonbox/state` feed (lands with Phase 3 step 6) and the final buzzer-cue picks.
 
 **Feedback + away-from-home test harness.** The per-state LED/buzzer feedback lives in `lib/feedback.py` (a `Feedback` class: `tap_accepted()`, `set_state()`, `tick()`, `off()`, `current_state`). Three test layers exercise the `tap → feedback → MQTT → state → ring/buzzer` loop with no home network, no HA, no Apple TV — see `docs/testing-away-from-home.md`:
 - `test/offline-harness/state_render_test.py` — Layer 1: drives `lib/feedback.py` through every state on a timer, no network, no NFC.
@@ -86,10 +84,9 @@ Common MicroPico commands (Cmd+Shift+P):
 | HiLetgo PN532 V3 NFC module (red PCB) | DIP switches on back select interface. Default ships in HSU/UART; **must be set to I2C** before wiring |
 | NTAG215 stickers | The PN532 kit's included Mifare Classic cards work for initial bench testing |
 | WS2812 NeoPixel ring, 24 LEDs (DIYMalls) | Phase 4. Power from **VSYS (5V)**, not 3V3 — ~360mA at 25% brightness (~1.4A if all-white at full brightness, more than VSYS/USB can supply, so cap brightness and never sustain all-white). 3 wires only: PWR→VSYS, GND→Pico GND, DIN→a PIO GPIO; leave the DOUT pad empty |
-| SSD1306 0.96" OLED, I2C | Phase 4. Shares I2C bus with PN532 (different addresses, no conflict) |
 | Passive buzzer | Phase 4. PWM on any GPIO |
 
-> **Dropped from v1** (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)): the KY-040 rotary encoder (volume knob) and a play/pause button. Volume and pause are handled by the Siri Remote. The kit parts stay in the bin in case a control returns in a later iteration.
+> **Dropped from v1**: the KY-040 rotary encoder (volume knob) and a play/pause button ([ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)) — volume and pause are handled by the Siri Remote — and the SSD1306 0.96" OLED ([ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)) — it would share the PN532's I²C bus, so re-adding it later costs no new pins. The kit parts stay in the bin in case any of them return in a later iteration.
 
 ## Pico pin allocation
 
@@ -112,7 +109,7 @@ Running map of every wired pin — **check this before adding a device so nothin
 Notes:
 - **Ground is a shared rail** — any device's GND can land in any free hole of a GND row. The ring shares the PN532's ground at R3; the buzzer uses **R13** (pin 28); **R8** (pin 33) is still a free GND hole.
 - **R4 (pin 37) is `3V3_EN`, not ground.** ⚠️ Never wire ground here — it disables the 3.3 V regulator and kills power to the PN532.
-- **I²C bus (GP4/GP5, L6/L7) is shared.** The Phase 4 OLED joins the *same two pins* — different I²C address, no conflict, no new pins.
+- **I²C bus (GP4/GP5, L6/L7) is shareable.** Only the PN532 is on it in v1; a future OLED (cut from v1 — [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)) would join the *same two pins* — different I²C address, no conflict, no new pins.
 - **Power rails:** VSYS = R2 (pin 39, ~4.7 V, also the future battery rail), VBUS = R1 (pin 40, true 5 V from USB).
 - **Buzzer signal is on GP22 (R12).** Passive piezo — driven directly by PWM on `Pin(22)`, no transistor or VCC. Its middle header pin (between S and −) is not connected; leave it empty. GP22 is a plain digital GPIO, so all three ADC pins (GP26/27/28) stay free.
 
@@ -122,9 +119,9 @@ Notes:
 Pico 2 WH  ──MQTT──▶  Mosquitto (Synology)  ◀─MQTT──▶  Home Assistant (Pi)
    │                                                          │
    │ (NFC tap → events)                                        │ pyatv → Apple TV
-   │ (state ← LEDs, OLED)                                      │ Plex API → movies
+   │ (state ← LED ring)                                        │ Plex API → movies
    ▼                                                           ▼
-Local feedback (LEDs, OLED, buzzer)                         Living room TV
+Local feedback (LED ring, buzzer)                           Living room TV
 ```
 
 **Brains live in Home Assistant, not on the Pico.** The Pico is a near-dumb input device that publishes events; HA owns all logic (tag→movie mapping, Apple TV control, switching). Changing a movie mapping never requires reflashing the box. The one piece of *local* state the Pico cares about is "is there an active session for UID X?" — so it can suppress duplicate taps and produce local feedback for re-taps. That state is driven by HA via the `vonbox/state` MQTT topic.
@@ -161,7 +158,7 @@ Local feedback (LEDs, OLED, buzzer)                         Living room TV
 ## Code conventions
 
 - Snake_case for everything.
-- One responsibility per file: `nfc.py`, `mqtt_client.py`, `leds.py`, `display.py`, `main.py` orchestrating.
+- One responsibility per file: `pn532.py`, `mqtt_client.py`, `feedback.py`, `main.py` orchestrating.
 - `async` functions where it makes sense (polling loops, MQTT receive, animations); plain functions for setup/teardown.
 - Constants in UPPER_SNAKE at module top, with units in the name: `POLL_INTERVAL_MS = 100`, not `POLL_INTERVAL = 0.1`.
 - `print()` for logging during dev; we'll replace with a small logger if it gets noisy.
