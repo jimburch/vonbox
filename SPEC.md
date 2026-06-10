@@ -1,6 +1,6 @@
 ---
 created: 2026-04-20, 3:48 PM
-updated: 2026-06-08
+updated: 2026-06-09
 tags:
 ---
 # NFC Movie Box for Von — Project Plan
@@ -31,8 +31,8 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 - ✅ Sub-milestone 2: Pico associates with the home Wi-Fi (`Jabby`), receives DHCP lease `192.168.0.80`, reports RSSI `-42 dBm`. Credentials live in `secrets.py` (gitignored); uploaded to the Pico's flash via MicroPico "Upload current file" so subsequent test scripts can `from secrets import ...`. Test script: `test/bench/wifi_test.py`.
 - ✅ Sub-milestone 3: Pico → Mosquitto verified end-to-end. `test/bench/mqtt_hello_test.py` publishes `hello N` to `test/hello` every 5 seconds via `umqtt.simple`; laptop `mosquitto_sub` receives each one within milliseconds. `umqtt.simple` is **not** frozen into the `RPI_PICO2_W` MicroPython 1.28.0 build despite older docs implying otherwise — installed once via `mip.install("umqtt.simple")` to `/lib/umqtt/simple.mpy` using `test/bench/install_umqtt.py`.
 - ✅ Sub-milestone 4: Inline PN532 driver extracted into `lib/pn532.py` (class `PN532` with `init()` and `read_passive_target()`; framing helpers private; raises `PN532Error` on bring-up failure). Orchestrator at `test/bench/nfc_to_mqtt_test.py` connects Wi-Fi → MQTT → PN532, then runs the Phase 2 polling loop and publishes `{"uid": "<HEX>"}` to `vonbox/nfc/tapped` on each new tap. Edge-trigger + 2s-absence cooldown preserved verbatim. Verified end-to-end: NTAG215 `04462765C82A81` produces `vonbox/nfc/tapped {"uid": "04462765C82A81"}` on the Mac subscriber; hold-for-5s = one publish, rapid re-tap suppressed, post-cooldown re-tap fires, tag-swap fires immediately with the new UID.
-- ▶️ Sub-milestone 5 next: HA automation. UID → Plex rating-key mapping (input_text helper or YAML config). On `vonbox/nfc/tapped`, look up the rating key and run the Phase 1 cold-start sequence. First true tap-to-play moment.
-- Sub-milestone 6 (planned): Bidirectional state sync. HA publishes Apple TV state transitions to `vonbox/state`; Pico subscribes and uses the state to decide whether a re-tap of the same UID is a local no-op or a fresh session.
+- ✅ Sub-milestone 5: tap-to-play working — the first true tap-to-play moment. HA automation `test/home-assistant/play_from_tap.yaml` triggers on `vonbox/nfc/tapped`, looks up the Plex rating key from a UID→rating-key mapping, and runs the Phase 1 cold-start sequence parameterised by rating key. The mapping lives inline in the automation's `variables:` block for now — simpler than the planned `input_text` helper while the library is one tag; revisit as tags accumulate. Unknown UIDs log a warning and stop (publishing the `error` state to `vonbox/state` lands with sub-milestone 6). Verified end-to-end: tapping NTAG215 `04462765C82A81` plays The Super Mario Bros. Movie (rating key `190`) from cold sleep. Hard-won sequencing fixes recorded as lessons #11–#12 below.
+- ▶️ Sub-milestone 6 next: Bidirectional state sync. HA publishes Apple TV state transitions to `vonbox/state`; Pico subscribes and uses the state to decide whether a re-tap of the same UID is a local no-op or a fresh session. The Pico side is already proven against the mock HA (`test/offline-harness/full_loop_test.py` + `lib/feedback.py`); the real-HA publishing automations are the new work.
 
 > **Tooling note:** switched from Thonny (mentioned in Phase 2 plan below) to **VS Code + MicroPico extension** — same MicroPython workflow, fits the existing editor. Phase 2 instructions still apply, just substitute MicroPico's "Run current file on Pico" for Thonny's run button.
 
@@ -66,7 +66,7 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 │  ─ PN532 NFC    │ MQTT │  ─ pyatv         │pyatv │  ─ Soundbar via │
 │  ─ NeoPixel ring│      │  ─ Plex integr.  │      │    HDMI-CEC     │
 │  ─ Buzzer       │      │  ─ State machine │      │                 │
-│  ─ OLED display │      │  ─ Cloudflared   │      │                 │
+│                 │      │  ─ Cloudflared   │      │                 │
 │                 │      │  (existing)      │      │                 │
 └─────────────────┘      └──────────────────┘      └─────────────────┘
                                   │
@@ -95,7 +95,7 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 - **Volume passes through Apple TV → HDMI-CEC → soundbar.** Same path as the existing Apple TV remote. v1 has no volume control on the box — the Siri Remote owns volume (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)).
 - **NFC polls at ~10Hz but events are edge-triggered.** The Pico publishes a single `tapped` event the first time a UID is read; it then suppresses further events for that UID until the tag has been *absent* for ~2s (or a different UID appears). Von can mash the tag against the box repeatedly; HA sees one event.
 - **The Pico tracks "session active" state per-UID so it can give local feedback.** While a UID's session is active, re-reads of the same UID produce a *local* "already playing" cue (chime + LED pulse) and do not generate HA events. The Pico learns session-end either by HA pushing state via MQTT (preferred — Apple TV state changes) or by its own timeout.
-- **MQTT for bidirectional Pico ↔ HA communication.** Event-driven, low-overhead. The Pico publishes events (tapped); HA publishes state updates back (playing, paused, standby, error) so the Pico can update LEDs, the OLED, and its own session-active state.
+- **MQTT for bidirectional Pico ↔ HA communication.** Event-driven, low-overhead. The Pico publishes events (tapped); HA publishes state updates back (playing, paused, standby, error) so the Pico can update its LEDs and its own session-active state.
 - **Pico is immediately responsive**, HA confirms state. Local feedback (instant beep/LED on tap acceptance) fires on the Pico the moment the read succeeds; HA-confirmed feedback (LED ring transitioning to "playing") follows once the movie is actually playing on the Apple TV.
 
 ---
@@ -106,7 +106,7 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 
 - Rotary encoder module (KY-040 style) — *not used in v1 (volume knob dropped — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)); kept in the parts bin for a later iteration*
 - Passive buzzer module (can play actual tones via PWM)
-- 0.96" OLED display (SSD1306, I2C)
+- 0.96" OLED display (SSD1306, I2C) — *not used in v1 (OLED dropped — see [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)); kept in the parts bin for a later iteration*
 - Tactile buttons — *not used in v1 (play/pause button dropped — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)); kept for a later iteration*
 - Breadboard, jumper wires, resistor assortment
 - LEDs (for bench testing)
@@ -168,10 +168,9 @@ Von (3.5 years old) loves the physical-object-triggers-media experience of his T
 - A clearly-marked tap zone (printed icon or color marker) where the NFC antenna sits directly underneath, so Von learns where to aim.
 - PN532 NFC antenna centered directly under the tap zone, as close to the surface as possible (read range is short — millimeters to a few cm with NTAG215 stickers).
 - NeoPixel 24-LED ring on top, around or near the tap zone, diffused through translucent PLA — the primary visual status surface.
-- OLED display in a window on the front face (movie title, parent-readable error messages).
 - Buzzer vented for clear sound.
 
-> v1 has no rotary encoder (volume knob) and no play/pause button — those were dropped to keep the first build simple. See [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md). The top surface for v1 is just the tap zone + LED ring; volume and pause are handled by the Siri Remote.
+> v1 has no rotary encoder (volume knob), no play/pause button ([ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)), and no OLED ([ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)) — all dropped to keep the first build simple. The box for v1 is just the tap zone + LED ring + buzzer vents; volume and pause are handled by the Siri Remote, and the TV itself shows what's playing.
 
 **Materials:**
 
@@ -210,6 +209,8 @@ The LED ring is the **primary visual status surface**. States below are listed i
 
 ### OLED display
 
+> **Dropped from v1** (see [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)) — kept here as the design reference for the iteration that re-adds it. The `title` it would render already rides along in every `vonbox/state` payload, so re-adding it is firmware + an enclosure window, no protocol change.
+
 - **Idle / standby:** clock or cute animation
 - **Tag detected:** movie title (briefly)
 - **Playing:** movie title, optionally a progress bar
@@ -239,6 +240,7 @@ v1 has **no on-box pause control** — the play/pause button was dropped to keep
 - **Tap-and-go interaction**: edge-triggered single read per UID, ~2s absence-based cooldown before the same UID can re-fire (see [ADR 0001](./docs/adr/0001-tap-and-go-instead-of-continuous-presence.md))
 - **Underlying poll rate ~10Hz** — gives ~100ms tap responsiveness; the polling itself is unchanged, only the event semantics shifted
 - **No volume knob and no play/pause button in v1** — both dropped to keep the first build simple (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)). Volume and pause are handled by the Siri Remote; either control may return in a later iteration.
+- **No OLED in v1** — dropped during production-hardware planning (see [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)). The LED ring + buzzer are the entire v1 feedback surface; the SSD1306 rejoins the shared I²C bus (GP4/GP5) if a later iteration brings it back.
 - **NeoPixels driven via PIO**, running at 25% brightness (safely powered from Pico's VSYS rail)
 - **One tag per movie** (simple mental model)
 - **No on-box resume timer.** Plex's native resume position handles "pick up where you left off"; HA does not manage a 1-hour clear cycle anymore.
@@ -640,23 +642,24 @@ feedback the Pico fires itself on a fresh tap, before any MQTT round-trip.
 8. **`umqtt.simple` is *not* frozen into the `RPI_PICO2_W` MicroPython 1.28.0 build.** `import umqtt.simple` raises `ImportError: no module named 'umqtt'` straight from a fresh flash, despite older project notes (and a fair amount of community lore) treating it as built-in. The fix is one-shot: connect to Wi-Fi, then `import mip; mip.install("umqtt.simple")` — this writes `/lib/umqtt/simple.mpy` to the Pico's flash and survives reboots. `test/bench/install_umqtt.py` automates this; only needs to run once per fresh Pico. After install, the heartbeat publisher in `test/bench/mqtt_hello_test.py` ran clean and the laptop subscriber received every message.
 9. **The PN532 retains in-flight I2C state across a MicroPico hot-restart.** When MicroPico's "Stop execution" interrupts a polling loop mid-frame, the chip's I2C buffer is left holding the tail of an unfinished response. The next script's first `SAMConfiguration` then *seems* to succeed at `_wait_ready` (the chip reports the leftover status byte as `0x01`) but the subsequent 7-byte ACK read NACKs with `OSError: [Errno 110] ETIMEDOUT`. Symptom is: orchestrator gets through Wi-Fi + MQTT, then immediately throws inside `PN532.init()`. **Manual fix:** unplug the Pico's USB for ~3s and re-run (full 3V3 cycle drains the chip). **Programmatic fix:** retry `SAMConfiguration` once with a 50ms gap inside `PN532.init()` — the first call's preamble forces the chip to discard the stale frame, the second call succeeds. Implemented in `lib/pn532.py` so day-to-day MicroPico use doesn't require unplugging.
 10. **`lib/` modules need to be uploaded to the Pico's flash, separately from the running `test/` script.** MicroPico's "Run current file on Pico" only ships the active file; `from pn532 import PN532` resolves against the Pico's filesystem, not the project on disk. When `lib/pn532.py` is edited, re-upload it via MicroPico's "Upload current file" before re-running the orchestrator. Same rule that already applied to `secrets.py` (lesson #7) — anything that gets `import`ed must live on flash.
+11. **A stale Plex Companion session silently swallows `play_media`.** After waking the Apple TV and selecting the Plex source, the first `play_media` can vanish into a control channel that hasn't re-established — Plex opens, nothing plays, no error anywhere. Fix: send a throwaway command first (`media_play` with `continue_on_error: true`) to force the Companion session to re-establish, wait ~2 s, then `play_media`. Implemented in `test/home-assistant/play_from_tap.yaml`.
+12. **Retry `play_media` only on genuine timeout, and confirm by rating key.** A fixed delay after `play_media` re-sent the command while the player state simply hadn't flipped yet — and Plex interprets a duplicate `play_media` for the same item as "restart the movie." The working pattern: `wait_template` until the Plex entity reports `playing` *and* its `media_content_id` matches the rating key (15 s timeout), re-send only if that wait times out, max 3 attempts. Also in `play_from_tap.yaml`.
 
-### Phase 4: NeoPixel ring + buzzer + OLED (1–2 evenings)
+### Phase 4: NeoPixel ring + buzzer (1–2 evenings)
 
 **Goal:** Full feedback vocabulary working on the bench-breadboarded box.
 
-> **v1 scope (see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)):** the rotary encoder (volume) and play/pause button are dropped from v1, so this phase is now output-only — LED ring, buzzer, OLED. The deferred input bits (encoder → `vonbox/volume/*` + Apple TV volume automation; button → `vonbox/button/play_pause` + pause/resume automation) move to a later iteration if the controls come back.
+> **v1 scope:** the rotary encoder (volume) and play/pause button are dropped from v1 ([ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md)), and so is the SSD1306 OLED ([ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)) — this phase is now LED ring + buzzer only. The deferred input bits (encoder → `vonbox/volume/*` + Apple TV volume automation; button → `vonbox/button/play_pause` + pause/resume automation) move to a later iteration if the controls come back; the OLED rejoins the shared I²C bus if it returns.
 
 - ✅ **NeoPixel ring — wired and bench-tested** (2026-06-08): `DIN`→GP28, `PWR`→VSYS, `GND`→shared ground (see the CLAUDE.md pin-allocation table). `test/bench/led_ring_test.py` confirms all 24 pixels, correct colors, no flicker, with brightness capped at 25% in firmware. It needs exactly **3 wires**: `PWR`→VSYS (5V), `GND`→Pico GND, `DIN`→a PIO-capable GPIO (any GPIO on the Pico can do PIO). Leave the `DOUT` (data-out) pad empty — it's only for chaining a second ring — and note the duplicate PWR/GND pads are bussed together, so wire just one of each. Data is directional: it must enter at `DIN`. Power considerations:
   - 24 LEDs at 25% brightness draw ~360mA — Pico's 3V3 regulator can't handle this. Power LEDs from VSYS (raw 5V from USB) and share ground with the Pico. All-white at full brightness would pull ~1.4A, which VSYS/USB can't supply either, so cap brightness in firmware and avoid sustained all-white.
   - Use a level shifter or 330Ω series resistor on the data line if color quality looks off (5V LEDs, 3.3V signal usually works fine in practice).
 - ✅ **Buzzer — wired and bench-tested** (2026-06-08): KY-006 passive piezo on GP22 (signal) + GND, middle header pin unused, driven directly by PWM — no transistor or VCC. `test/bench/buzzer_test.py` auditions success / error / neutral cues plus a 150 Hz→4 kHz range sweep. Final cue picks (what becomes `play_success()` / `play_error()`) are still TBD.
-- ⬜ Wire OLED to the same I2C bus as the PN532 (shared SDA/SCL, different I2C addresses — no conflict). MicroPython has `ssd1306` built in. *(Not yet wired — the remaining Phase 4 hardware.)*
+- ❌ ~~Wire OLED to the same I2C bus as the PN532~~ — **dropped from v1** (2026-06-09, see [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)). With the ring and buzzer verified, no Phase 4 hardware remains. (For the record: it would share SDA/SCL with the PN532 at a different I2C address — no conflict — and MicroPython has `ssd1306` built in.)
 - MicroPython animation functions for each LED state defined in "User feedback vocabulary."
 - MicroPython tone-playing functions for each buzzer event.
-- OLED renders current state (idle / playing / paused / error / movie title).
 
-**State sync:** the Pico subscribes to `vonbox/state` MQTT topic. HA publishes state updates there using the canonical tagged payload (e.g. `{"state": "playing", "uid": "04A1B2C3", "title": "Toy Story", "reason": null}` — see "`vonbox/state` payload (canonical)" in Phase 3), and the Pico updates LEDs, OLED, and its own "session active" tracking accordingly. This is what lets the Pico tell "same tag = no-op" from "new tag = switch."
+**State sync:** the Pico subscribes to `vonbox/state` MQTT topic. HA publishes state updates there using the canonical tagged payload (e.g. `{"state": "playing", "uid": "04A1B2C3", "title": "Toy Story", "reason": null}` — see "`vonbox/state` payload (canonical)" in Phase 3), and the Pico updates LEDs and its own "session active" tracking accordingly. This is what lets the Pico tell "same tag = no-op" from "new tag = switch."
 
 #### Testing the feedback loop away from home
 
@@ -689,16 +692,18 @@ order, troubleshooting): **`docs/testing-away-from-home.md`**.
 
 **Wiring migration — breadboard → protoboard:**
 
+> The concrete shopping list, connector plan, and final-assembly layout live in `docs/production-hardware.md`; the bullets below are the strategy.
+
 - Move from breadboard to a **Pico-specific protoboard** (Pimoroni "Proto Board for Pico" or Adafruit "Perma-Proto for Pico", ~$3–5). These have the Pico's pinout labeled on the silkscreen so the layout is almost mechanical to transfer.
 - Solder **female header sockets** onto the protoboard where the Pico's pins will go. The Pico 2 WH then plugs into these sockets — same as it did on the breadboard, just permanent.
 - This keeps the Pico **removable and reprogrammable** without desoldering — critical for a toddler-facing device where you'll want to tweak firmware, debug Wi-Fi, or swap in a new Pico if one fries.
-- Solder the rest of the connections (PN532 wires, NeoPixel ring, buzzer, OLED) to the protoboard with strain relief. Use JST or screw-terminal connectors where practical so individual components can be unplugged for maintenance. *(No encoder or button in v1 — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md).)*
+- Solder the rest of the connections (PN532 wires, NeoPixel ring, buzzer) to the protoboard with strain relief. Use JST or screw-terminal connectors where practical so individual components can be unplugged for maintenance. *(No encoder, button, or OLED in v1 — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md) and [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md).)*
 - This trades ~15mm of vertical space (for the socket stack) for massively better reliability and serviceability. Not a meaningful tradeoff in a box this size.
 
 **Enclosure design:**
 
 - Design in Fusion 360 / OnShape / Tinkercad
-- Box holds: Pico 2 WH on protoboard, PN532 under top surface (as close to the surface as possible — read range is short), NeoPixel ring just below top surface around the tap zone, OLED window on front face, USB cable out back for power, buzzer vented. *(No rotary encoder or play/pause button in v1 — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md); the top surface is just the tap zone + LED ring.)*
+- Box holds: Pico 2 WH on protoboard, PN532 under top surface (as close to the surface as possible — read range is short), NeoPixel ring just below top surface around the tap zone, USB cable out back for power, buzzer vented. *(No rotary encoder, play/pause button, or OLED in v1 — see [ADR 0002](./docs/adr/0002-drop-volume-knob-and-play-pause-button-for-v1.md) and [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md); the top surface is just the tap zone + LED ring, and there is no front-face window.)*
 - The Pico is tiny (~21mm × 51mm) and runs cool — no heat management or ventilation needed
 - **Tag token v1:** laminated cards with movie poster art and an NTAG215 sticker on the back. Cheapest, fastest, blog-post style. Lets you iterate on the box without committing to a 3D-printed token form.
 - **Tag token v2+:** 3D-printed coins or mini figurines with a recess for the NTAG215 sticker. No magnet holes, no ferrite pocket — those were only needed for the old magnetic-mating design.
@@ -712,7 +717,7 @@ As you live with it:
 - Custom tag-token designs — printed cards, 3D-printed coins, or mini figurines for Buzz, Lightning McQueen, etc.
 - Battery + charging dock (pogo pins or magnetic connector) — Pico's low power means a modest LiPo should last days
 - Parental controls in HA (no movies after bedtime, daily time limits)
-- Richer OLED UI (movie poster thumbnails, time-remaining)
+- Re-add the SSD1306 OLED (dropped from v1 — see [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)): movie title first, then richer UI (poster thumbnails, time-remaining). It joins the existing I²C bus — no new pins; a 4-pin JST lead and an enclosure window
 - Refined enclosure aesthetics
 - Home Assistant dashboard view for dad to see what Von is watching / remotely pause / etc.
 

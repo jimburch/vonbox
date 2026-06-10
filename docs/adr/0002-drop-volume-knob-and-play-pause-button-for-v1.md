@@ -1,8 +1,10 @@
 # ADR 0002 — Drop the volume knob and play/pause button for v1
 
-- **Status:** Accepted
+- **Status:** Accepted (amended in part by [ADR 0003](./0003-drop-oled-for-v1.md))
 - **Date:** 2026-06-08
 - **Amends:** [ADR 0001](./0001-tap-and-go-instead-of-continuous-presence.md) — which introduced the physical play/pause button as the box's only pause mechanism
+
+> **Amendment (2026-06-09):** [ADR 0003](./0003-drop-oled-for-v1.md) drops the **SSD1306 OLED** from v1 as well — the "drop the OLED too" alternative rejected below was later accepted during production-hardware planning. The v1 device list is now Pico + PN532 + LED ring + buzzer.
 
 ## Context
 
