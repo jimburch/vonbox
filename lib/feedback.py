@@ -59,14 +59,24 @@ OFF        = (0, 0, 0)
 # --- buzzer cues (named so they're trivial to swap when the user picks finals)-
 #
 # Each cue is a list of (freq_hz, ms); freq 0 is a rest. Frequencies match the
-# note table in test/bench/buzzer_test.py. These are the contract defaults — the
-# user's final picks are still TBD, so keep them isolated up here.
-B5, E6 = 988, 1319
-A5 = 880
+# note table in test/bench/buzzer_test.py. Four of these mark the milestones the
+# box announces out loud, laddered lowest-and-calmest -> highest-and-brightest:
+#   boot           CHIME_BOOT            "powered on"      calm rising fifth
+#   tap accepted   CHIME_TAP             "got it"          quick bright two-note
+#   playing        CHIME_PLAYING         "movie starting!" bright rising triad
+#   error          TONE_ERROR_DESCENDING "nope"            low descending wah-wah
+# Pitch carries the meaning: the piezo rings louder near its ~2-4kHz resonance,
+# so "good" cues climb and "bad" cues fall. These are sensible picks from the
+# buzzer_test.py menu; swap freely right here once they're judged by ear.
+A4, E5 = 440, 659
+A5     = 880
+B5, C6, E6, G6 = 988, 1047, 1319, 1568
 A3 = 220
 F3_DULL = 175  # ~F3, a dull low landing
 
+CHIME_BOOT            = [(A4, 140), (E5, 240)]             # calm rising fifth, "powered on" (=380ms; boot is a one-shot, blocking is fine)
 CHIME_TAP             = [(B5, 80), (E6, 200)]              # rising two-note "got it" (=280ms, under the <=300ms tap budget)
+CHIME_PLAYING         = [(C6, 70), (E6, 70), (G6, 160)]    # bright rising triad landing high, "movie starting!" (=300ms)
 NOTE_ALREADY_PLAYING  = [(A5, 150)]                        # single soft mid-note
 TONE_ERROR_DESCENDING = [(A3, 150), (0, 20), (F3_DULL, 200)]  # soft low "wah-wah" (=370ms, kept brief so the cue can't stall the loop)
 
@@ -133,6 +143,36 @@ class Feedback:
 
     # --- public API -----------------------------------------------------------
 
+    def boot(self):
+        """One-shot power-on flourish: a calm rising cue + a single warm-white
+        comet lap around the ring, ending dark.
+
+        Call this ONCE at startup, BEFORE the tick() loop and before the first
+        set_state('idle'). Unlike every other cue this is allowed to block for
+        ~1s on purpose — it runs before the main loop exists, so there is nothing
+        to keep responsive yet. It deliberately does NOT leave a sustained state;
+        the caller's set_state('idle') takes over immediately after.
+        """
+        self._play(CHIME_BOOT)
+        # A single comet sweep (bright head, fading tail) so the ring visibly
+        # "wakes up". Head runs 0 -> last pixel and trails off the end; no wrap,
+        # so it reads as one clean pass rather than a spin.
+        tail = 6
+        for step in range(self.num_pixels + tail):
+            for i in range(self.num_pixels):
+                self._ring[i] = OFF
+            for t in range(tail):
+                idx = step - t
+                if idx < 0 or idx >= self.num_pixels:
+                    continue
+                falloff = (tail - t) / tail
+                self._ring[idx] = self._scale(WARM_WHITE, 0.9 * falloff)
+            self._ring.write()
+            time.sleep_ms(28)
+        for i in range(self.num_pixels):
+            self._ring[i] = OFF
+        self._ring.write()
+
     def tap_accepted(self):
         """Fresh-tap local feedback, fired by the Pico BEFORE any MQTT round-trip.
 
@@ -163,6 +203,13 @@ class Feedback:
         if state not in SUSTAINED_STATES:
             print("feedback: unknown state %r, ignoring" % (state,))
             return
+
+        # "Movie starting!" confirmation cue — fired ONLY on a genuine entry into
+        # playing, not on a retained-playing refresh after a reconnect, so a box
+        # that re-subscribes mid-movie doesn't re-trumpet the whole jingle. Brief
+        # blocking here is consistent with the error/already_playing cues above.
+        if state == "playing" and self.current_state != "playing":
+            self._play(CHIME_PLAYING)
 
         # Entering a sustained state cancels any running transient and resets
         # the frame baseline so the new animation starts clean.

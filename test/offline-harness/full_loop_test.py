@@ -177,6 +177,7 @@ connect_wifi()
 mqtt = connect_mqtt(make_state_handler(fb, pending_loading))
 nfc = init_pn532()
 
+fb.boot()              # power-on flourish: rising cue + warm-white comet lap
 fb.set_state("idle")
 print("ready. tap a tag.")
 

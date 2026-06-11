@@ -40,6 +40,12 @@ def run_sequence(fb):
     # One full pass through the whole state vocabulary, in the order the box
     # would naturally move through a tap-to-play session, plus the transients.
 
+    # Boot flourish first — the power-on cue + warm-white comet lap. One-shot and
+    # blocking by design (see Feedback.boot); here it heads each looped pass so
+    # you can re-audition it without re-running the script.
+    print("boot (rising fifth + warm-white comet lap)")
+    fb.boot()
+
     print("idle (breathing soft-warm-white)")
     fb.set_state("idle")
     dwell(fb, 3000)
@@ -52,7 +58,9 @@ def run_sequence(fb):
     fb.set_state("loading")
     dwell(fb, 2500)
 
-    print("playing (solid green)")
+    # Entering playing from loading fires the "movie starting!" confirm triad
+    # (rising C6-E6-G6) on top of the solid-green fill.
+    print("playing (movie-starting triad -> solid green)")
     fb.set_state("playing", title="The Super Mario Bros. Movie")
     dwell(fb, 3000)
 
