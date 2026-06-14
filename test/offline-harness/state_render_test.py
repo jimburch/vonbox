@@ -46,7 +46,7 @@ def run_sequence(fb):
     print("boot (rising fifth + warm-white comet lap)")
     fb.boot()
 
-    print("idle (breathing soft-warm-white)")
+    print("idle (quiet — ring rests dark, no breathe)")
     fb.set_state("idle")
     dwell(fb, 3000)
 
@@ -58,15 +58,16 @@ def run_sequence(fb):
     fb.set_state("loading")
     dwell(fb, 2500)
 
-    # Entering playing from loading fires the "movie starting!" confirm triad
-    # (rising C6-E6-G6) on top of the solid-green fill.
-    print("playing (movie-starting triad -> solid green)")
+    # 'playing' is a confirmation, not a hold: the movie-starting triad fires,
+    # green holds ~3 s, then fades out ~1.2 s back to the dark idle rest — ready
+    # for the next tap. Dwell long enough to watch the full hold + fade.
+    print("playing (movie-starting triad -> green hold -> fade to dark idle)")
     fb.set_state("playing", title="The Super Mario Bros. Movie")
-    dwell(fb, 3000)
+    dwell(fb, 5500)
 
-    # Transient: plays its cue then auto-reverts to the prior sustained state
-    # (playing). Watch for the soft pulse + mid-note, then back to green.
-    print("already_playing (transient pulse -> revert to playing)")
+    # Re-tap of an already-playing movie: soft mid-note + one pulse, then back to
+    # the dark idle rest (playing has already faded out, so this reverts to idle).
+    print("already_playing (soft note + pulse -> back to dark idle)")
     fb.set_state("already_playing")
     dwell(fb, 2000)
 
