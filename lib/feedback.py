@@ -82,12 +82,16 @@ NOTE_ALREADY_PLAYING  = [(A5, 150)]                        # single soft mid-not
 TONE_ERROR_DESCENDING = [(A3, 150), (0, 20), (F3_DULL, 200)]  # soft low "wah-wah" (=370ms, kept brief so the cue can't stall the loop)
 
 
-# --- the sustained state vocabulary -------------------------------------------
+# --- the session state vocabulary ---------------------------------------------
 #
-# These are the states HA can park the box in. Transients (error,
-# already_playing) and the local tap sparkle are handled separately and are
-# NOT members of this set — they always revert to one of these.
-SUSTAINED_STATES = ("idle", "loading", "playing", "paused", "standby")
+# SUSTAINED_STATES are the states HA can park the box in indefinitely; their
+# render holds until the next state arrives. 'playing' is deliberately NOT one
+# of them: the box is tap-and-go, not a presence light, so a movie start is a
+# brief green confirmation flash that fades back to the quiet idle rest (handled
+# like a transient cue in set_state). A held green ring would read as "busy,
+# won't take another tap". The other transients (error, already_playing) and the
+# local tap sparkle likewise always revert to a sustained state.
+SUSTAINED_STATES = ("idle", "loading", "paused", "standby")
 TRANSIENT_STATES = ("error", "already_playing")
 
 
@@ -95,11 +99,10 @@ class Feedback:
     """LED + buzzer renderer. Pump tick() every main-loop iteration."""
 
     # Frame intervals (ms) per sustained state. Larger interval = slower
-    # animation. "playing" holds a constant color, so its interval is large and
-    # the render is a no-op refresh — no need to redraw a steady fill often.
+    # animation. idle is a constant dark fill now (the quiet rest), so its
+    # interval just sets how often that no-op fill refreshes.
     _IDLE_INTERVAL_MS    = 40
     _LOADING_INTERVAL_MS = 40
-    _PLAYING_INTERVAL_MS = 500
     _PAUSED_INTERVAL_MS  = 45
     _STANDBY_INTERVAL_MS = 90   # very slow breathing
     _TRANSIENT_INTERVAL_MS = 45
@@ -119,12 +122,16 @@ class Feedback:
     _LEVEL_ERROR   = 0.40 / BRIGHTNESS
     _LEVEL_SPARKLE = 0.25 / BRIGHTNESS
 
-    # Transient durations in frames.
+    # Transient durations in frames (all counted at _TRANSIENT_INTERVAL_MS).
     _ERROR_FLASHES        = 3
     _ERROR_FRAMES_PER_FLASH = 8     # on-half then off-half within each flash
     _ERROR_TOTAL_FRAMES   = _ERROR_FLASHES * _ERROR_FRAMES_PER_FLASH
     _PULSE_FRAMES         = 24      # one soft pulse over the current color
     _SPARKLE_FRAMES       = 14      # quick green sparkle then settle
+    # 'playing' confirmation: solid green hold, then fade to dark, then revert to
+    # the quiet idle rest. ~2.0 s hold + ~1.25 s fade at 45 ms/frame.
+    _PLAYING_HOLD_FRAMES  = 44
+    _PLAYING_FADE_FRAMES  = 28
 
     # Headless boot/connectivity diagnostics (see the diagnostics section
     # below). Frame periods assume main.py drives these at ~25 fps from its
@@ -212,16 +219,25 @@ class Feedback:
             self._enter_transient(state)
             return
 
+        if state == "playing":
+            # Movie-started confirmation. NOT a held state: the box is tap-and-go,
+            # so green is a brief "got it — it's playing!" that fades back to the
+            # quiet (dark) idle rest, leaving the ring obviously ready for the next
+            # tap. A sustained green ring reads as "busy, won't take another tap".
+            # Rendered like a transient: hold green -> fade out -> revert to idle.
+            # Always chimes on a genuine 'playing' message (retain is OFF on the HA
+            # side, so the box only sees this once per real play — no reconnect
+            # re-trumpet to guard against); the _transient check only stops a
+            # duplicate 'playing' from re-firing the jingle mid-flash.
+            if self._transient != "playing":
+                self._play(CHIME_PLAYING)
+            self.current_state = "idle"        # the resting state we fade into
+            self._enter_transient("playing")   # _revert_to <- "idle"
+            return
+
         if state not in SUSTAINED_STATES:
             print("feedback: unknown state %r, ignoring" % (state,))
             return
-
-        # "Movie starting!" confirmation cue — fired ONLY on a genuine entry into
-        # playing, not on a retained-playing refresh after a reconnect, so a box
-        # that re-subscribes mid-movie doesn't re-trumpet the whole jingle. Brief
-        # blocking here is consistent with the error/already_playing cues above.
-        if state == "playing" and self.current_state != "playing":
-            self._play(CHIME_PLAYING)
 
         # Entering a sustained state cancels any running transient and resets
         # the frame baseline so the new animation starts clean.
@@ -363,6 +379,8 @@ class Feedback:
             return self._PULSE_FRAMES
         if self._transient == "tap_accepted":
             return self._SPARKLE_FRAMES
+        if self._transient == "playing":
+            return self._PLAYING_HOLD_FRAMES + self._PLAYING_FADE_FRAMES
         return 0
 
     def _current_interval_ms(self):
@@ -373,8 +391,6 @@ class Feedback:
             return self._IDLE_INTERVAL_MS
         if s == "loading":
             return self._LOADING_INTERVAL_MS
-        if s == "playing":
-            return self._PLAYING_INTERVAL_MS
         if s == "paused":
             return self._PAUSED_INTERVAL_MS
         if s == "standby":
@@ -393,15 +409,16 @@ class Feedback:
             self._frame_pulse(self._revert_to)
         elif self._transient == "tap_accepted":
             self._frame_sparkle()
+        elif self._transient == "playing":
+            self._frame_play_confirm()
         else:
             s = self.current_state
             if s == "idle":
-                self._frame_breathe(WARM_WHITE, self._BREATHE_FRAMES_IDLE,
-                                    self._LEVEL_IDLE)
+                # Quiet, dark rest: the box sits dark when idle so that lighting
+                # up == "I took your tap". (No constant breathe — idle pref.)
+                self._frame_fill(OFF, 1.0)
             elif s == "loading":
                 self._frame_chase(BLUE, self._LEVEL_LOADING)
-            elif s == "playing":
-                self._frame_fill(GREEN, self._LEVEL_PLAYING)
             elif s == "paused":
                 self._frame_breathe(AMBER, self._BREATHE_FRAMES_PAUSED,
                                     self._LEVEL_PAUSED)
@@ -444,6 +461,20 @@ class Feedback:
         on = self._scale(GREEN, self._LEVEL_SPARKLE)
         for k in range(3):
             self._ring[(base + k * 7) % self.num_pixels] = on
+
+    def _frame_play_confirm(self):
+        # Movie-started confirmation: hold solid green, then fade it down to dark.
+        # tick() reverts to the (dark) idle rest once the fade completes. Green is
+        # a flash, not a hold, on purpose — see set_state('playing').
+        hold = self._PLAYING_HOLD_FRAMES
+        fade = self._PLAYING_FADE_FRAMES
+        if self._frame < hold:
+            self._frame_fill(GREEN, self._LEVEL_PLAYING)
+        else:
+            remaining = (hold + fade - self._frame) / fade
+            if remaining < 0.0:
+                remaining = 0.0
+            self._frame_fill(GREEN, self._LEVEL_PLAYING * remaining)
 
     def _frame_pulse(self, base_state):
         # One soft brightness pulse (triangle 0->1->0) over the color of the
