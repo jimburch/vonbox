@@ -55,7 +55,7 @@ actions:
       - condition: template
         value_template: >-
           {{ states('media_player.plex_plex_for_apple_tv_apple_tv') in ['playing', 'paused']
-             and state_attr('media_player.plex_plex_for_apple_tv_apple_tv', 'media_content_id') | string == rating_key }}
+             and state_attr('media_player.plex_plex_for_apple_tv_apple_tv', 'media_content_id') | string == rating_key | string }}
     then:
       - action: mqtt.publish
         data:
@@ -107,10 +107,21 @@ actions:
   - delay: "00:00:02"
   - repeat:
       sequence:
+        # KEEP play_media in this flat shape (media_content_id +
+        # media_content_type directly under data:). Do NOT open this automation
+        # in HA's *visual* editor and re-save: its media picker rewrites this
+        # into `data: { media: { ... } }`, which hands Plex the rating key as an
+        # INTEGER and bypasses play_media's cv.string coercion. Plex silently
+        # ignores an integer rating key, so the movie never starts, the Plex
+        # entity stays 'unavailable', and the loop falls through to
+        # 'playback_failed'. (Exact bug seen 2026-06-14.) Deploy via the YAML
+        # editor only. NB: the Plex entity does NOT need to be 'available' to
+        # play -- play_media works as long as Plex is the foreground app, which
+        # select_source above guarantees. Don't gate playback on availability.
         - target:
             entity_id: media_player.plex_plex_for_apple_tv_apple_tv
           data:
-            media_content_id: "{{ rating_key }}"
+            media_content_id: "{{ rating_key | string }}"
             media_content_type: movie
           action: media_player.play_media
         # Wait up to 15s for Plex to actually start playing. Only retry on
@@ -120,7 +131,7 @@ actions:
         - wait_template: >-
             {{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing'
             and state_attr('media_player.plex_plex_for_apple_tv_apple_tv',
-            'media_content_id') | string == rating_key }}
+            'media_content_id') | string == rating_key | string }}
           timeout: "00:00:15"
           continue_on_timeout: true
         - if:
@@ -128,14 +139,21 @@ actions:
               value_template: >-
                 {{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing'
                 and state_attr('media_player.plex_plex_for_apple_tv_apple_tv',
-                'media_content_id') | string == rating_key }}
+                'media_content_id') | string == rating_key | string }}
           then:
-            # Confirmed playing the right movie -> sustained state, retained so a
-            # box that (re)connects mid-movie immediately shows 'playing'.
+            # Confirmed playing the right movie -> sustained 'playing'. NOT
+            # retained, on purpose. A retained 'playing' is redelivered to the box
+            # every time it (re)subscribes, so a fresh boot re-trumpets the success
+            # chime and goes green with no tap: the box resets current_state to
+            # 'idle' on boot, so feedback.py's re-fire guard (state=='playing' and
+            # current_state!='playing') can't catch a retained replay. It would
+            # also go stale -- nothing publishes a terminal state when the movie
+            # ends or is paused/stopped from the Siri Remote, so the retained value
+            # asserts 'playing' long after the TV is off. The box boots to idle and
+            # only goes green on a live tap.
             - action: mqtt.publish
               data:
                 topic: vonbox/state
-                retain: true
                 payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
             - stop: Movie is playing
       until:

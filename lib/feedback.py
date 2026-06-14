@@ -53,6 +53,7 @@ GREEN      = (0, 255, 0)      # movie confirmed playing
 BLUE       = (0, 0, 255)      # loading / waiting on playback
 AMBER      = (255, 120, 0)    # paused
 RED        = (255, 0, 0)      # error
+PURPLE     = (160, 0, 255)    # broker-unreachable diagnostic (distinct from RED)
 OFF        = (0, 0, 0)
 
 
@@ -125,6 +126,16 @@ class Feedback:
     _PULSE_FRAMES         = 24      # one soft pulse over the current color
     _SPARKLE_FRAMES       = 14      # quick green sparkle then settle
 
+    # Headless boot/connectivity diagnostics (see the diagnostics section
+    # below). Frame periods assume main.py drives these at ~25 fps from its
+    # feed-the-watchdog connect wait, NOT via tick().
+    _DIAG_BOOT_LEVEL     = 0.12 / BRIGHTNESS   # steady dim "alive, in boot window"
+    _DIAG_CONNECT_LEVEL  = 0.30 / BRIGHTNESS
+    _DIAG_WIFI_FRAMES    = 50       # slow blue breathe period (associating)
+    _DIAG_BLINK_PERIOD   = 24       # amber double-blink cycle (Wi-Fi unreachable)
+    _DIAG_BROKER_FRAMES  = 36       # purple breathe period (broker unreachable)
+    _DIAG_BROKER_LEVEL   = 0.35 / BRIGHTNESS
+
     def __init__(self, led_pin=LED_PIN_DEFAULT, num_pixels=NUM_PIXELS_DEFAULT,
                  buzzer_pin=BUZZER_PIN_DEFAULT):
         self.num_pixels = num_pixels
@@ -140,6 +151,7 @@ class Feedback:
 
         self._frame = 0
         self._last_frame = time.ticks_ms()
+        self._diag_frame = 0   # independent counter for the diagnostics below
 
     # --- public API -----------------------------------------------------------
 
@@ -254,6 +266,70 @@ class Feedback:
             self._ring[i] = OFF
         self._ring.write()
         self._buzzer.duty_u16(0)
+
+    # --- headless boot / connectivity diagnostics ------------------------------
+    #
+    # The ring is the box's ONLY console when no laptop is attached, so the
+    # pre-network boot/connectivity status has to be legible across the room.
+    # These methods deliberately live OUTSIDE the session state machine: they
+    # are not SUSTAINED_STATES/TRANSIENT_STATES, never touch current_state, and
+    # draw their own frame (they don't go through tick()). main.py drives them
+    # one frame per call from its connect loops, at ~25 fps inside the wait that
+    # also feeds the watchdog. They're silent by design — a box beeping while the
+    # router reboots next to the TV would be obnoxious; the dad reads the ring.
+    # The three "something's wrong" looks are kept visually distinct:
+    #   net_error('wifi')   -> AMBER double-blink   (no link to the router)
+    #   net_error('broker') -> PURPLE slow breathe  (router ok, broker down)
+    #   session 'error'     -> RED 3-flash          (the state machine, elsewhere)
+
+    def booting(self):
+        """Dim steady warm-white fill: 'powered, alive, in the boot-guard window'."""
+        self._frame_fill(WARM_WHITE, self._DIAG_BOOT_LEVEL)
+        self._ring.write()
+        self._diag_frame += 1
+
+    def connecting_wifi(self):
+        """Slow blue breathe: 'associating with Wi-Fi'."""
+        self._diag_breathe(BLUE, self._DIAG_WIFI_FRAMES, self._DIAG_CONNECT_LEVEL)
+        self._ring.write()
+        self._diag_frame += 1
+
+    def connecting_mqtt(self):
+        """Blue dot chasing the ring: 'reaching the broker' (distinct motion from Wi-Fi)."""
+        head = self._diag_frame % self.num_pixels
+        on = self._scale(BLUE, self._DIAG_CONNECT_LEVEL)
+        for i in range(self.num_pixels):
+            self._ring[i] = on if i == head else OFF
+        self._ring.write()
+        self._diag_frame += 1
+
+    def net_error(self, leg):
+        """Sustained 'can't connect' diagnostic. leg='wifi' -> amber double-blink;
+        anything else ('broker') -> purple slow breathe. Both distinct from each
+        other and from the red session-error flash."""
+        if leg == "wifi":
+            self._diag_double_blink(AMBER)
+        else:
+            self._diag_breathe(PURPLE, self._DIAG_BROKER_FRAMES, self._DIAG_BROKER_LEVEL)
+        self._ring.write()
+        self._diag_frame += 1
+
+    def _diag_breathe(self, color, period_frames, peak_level):
+        # Triangle 0->peak->0 over period_frames, off the independent _diag_frame
+        # counter so it never disturbs the session animation's _frame.
+        half = period_frames // 2
+        phase = self._diag_frame % period_frames
+        tri = phase if phase <= half else (period_frames - phase)
+        level = (tri / half) * peak_level if half else 0.0
+        self._frame_fill(color, level)
+
+    def _diag_double_blink(self, color):
+        # Two short blinks then a long gap, repeating: reads as "searching, no link".
+        phase = self._diag_frame % self._DIAG_BLINK_PERIOD
+        if phase < 3 or 5 <= phase < 8:
+            self._frame_fill(color, self._DIAG_CONNECT_LEVEL)
+        else:
+            self._frame_fill(OFF, 1.0)
 
     # --- internal: buzzer ------------------------------------------------------
 
