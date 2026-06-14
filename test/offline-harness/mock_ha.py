@@ -52,7 +52,7 @@ PLAYBACK_DELAY_S = 2.5
 # the title too because it's a required key in the canonical vonbox/state
 # payload (and a future display would render it — see ADR 0003).
 MOVIE_TABLE = {
-    "04462765C82A81": ("190", "The Super Mario Bros. Movie"),
+    "045AED5ECD2A81": ("190", "The Super Mario Bros. Movie"),
 }
 
 # A designated tag that is "known" but whose playback always fails, so we can
@@ -62,7 +62,7 @@ FAKE_FAIL_UID = "04FA11FA11FA11"
 
 # Placeholder identity used by the stdin 'playing'/'error' inject commands,
 # which have no real tag behind them.
-INJECT_UID = "04462765C82A81"
+INJECT_UID = "045AED5ECD2A81"
 INJECT_TITLE = "The Super Mario Bros. Movie"
 
 
@@ -217,7 +217,7 @@ mock_ha ready. Tap a tag against the Pico, or inject a state by typing:
     help      -> show this banner
     quit      -> publish idle and exit
 
-Known test tag : 04462765C82A81 -> "The Super Mario Bros. Movie" (key 190)
+Known test tag : 045AED5ECD2A81 -> "The Super Mario Bros. Movie" (key 190)
 Fake-fail tag  : {fail}  -> loading then error/playback_failed
 Any other UID  : immediate error/unknown_tag
 """.format(fail=FAKE_FAIL_UID)

@@ -127,7 +127,7 @@ Local feedback (LED ring, buzzer)                           Living room TV
 **Brains live in Home Assistant, not on the Pico.** The Pico is a near-dumb input device that publishes events; HA owns all logic (tag→movie mapping, Apple TV control, switching). Changing a movie mapping never requires reflashing the box. The one piece of *local* state the Pico cares about is "is there an active session for UID X?" — so it can suppress duplicate taps and produce local feedback for re-taps. That state is driven by HA via the `vonbox/state` MQTT topic.
 
 **MQTT topics + canonical payloads** (do not reintroduce the bare-key form):
-- Pico **publishes** `vonbox/nfc/tapped` → `{"uid": "<HEX>"}`, e.g. `{"uid": "04462765C82A81"}`.
+- Pico **publishes** `vonbox/nfc/tapped` → `{"uid": "<HEX>"}`, e.g. `{"uid": "045AED5ECD2A81"}`.
 - Pico **subscribes** `vonbox/state` → the **tagged** payload, all four keys always present (`uid`/`title`/`reason` are `null` when N/A):
   `{"state": "<NAME>", "uid": "<HEX|null>", "title": "<str|null>", "reason": "<str|null>"}`.
   `<NAME>` ∈ `idle`, `loading`, `playing`, `already_playing`, `paused`, `standby`, `error` (`error` carries `reason`, e.g. `"unknown_tag"`). Never `{"playing": "<uid>"}` or other bare-key variants. (`tap_accepted` is local-only Pico feedback, not a `vonbox/state` value.)

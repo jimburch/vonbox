@@ -187,11 +187,11 @@ Then: MicroPico "Run current file on Pico" on **`test/offline-harness/full_loop_
 
 Watch the Pico associate with the hotspot and connect to the broker (the
 `mosquitto -v` terminal logs the connection). Now **tap the NTAG215
-(`04462765C82A81`)** against the PN532 and watch the choreography:
+(`045AED5ECD2A81`)** against the PN532 and watch the choreography:
 
 1. Pico fires **local** `tap_accepted()` — green sparkle + rising two-note chime,
    *before* any network round-trip.
-2. Pico publishes `vonbox/nfc/tapped {"uid": "04462765C82A81"}` and optimistically
+2. Pico publishes `vonbox/nfc/tapped {"uid": "045AED5ECD2A81"}` and optimistically
    shows `loading` (blue chase).
 3. `mock_ha.py` sees the tap, waits its fake wake delay, publishes `loading` then
    `playing` on `vonbox/state`.
@@ -214,7 +214,7 @@ Drive a state by hand — note the **tagged** payload shape (every field present
 
 ```bash
 mosquitto_pub -h localhost -t vonbox/state \
-  -m '{"state":"playing","uid":"04462765C82A81","title":"The Super Mario Bros. Movie","reason":null}'
+  -m '{"state":"playing","uid":"045AED5ECD2A81","title":"The Super Mario Bros. Movie","reason":null}'
 ```
 
 Swap `"state"` for any of: `idle`, `loading`, `playing`, `already_playing`,

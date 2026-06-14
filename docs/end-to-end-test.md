@@ -67,7 +67,7 @@ through the full loop.
 
 **Broker** (Synology): Mosquitto container up, user `vonbox` exists.
 
-**Tag:** the known NTAG215 `04462765C82A81` → Plex rating key `190` (The Super
+**Tag:** the production NTAG215 `045AED5ECD2A81` (inside the Mario Blu-ray box) → Plex rating key `190` (The Super
 Mario Bros. Movie), already in `play_from_tap.yaml`'s map.
 
 ## `secrets.py` — home values
@@ -124,7 +124,7 @@ the reader and watch all three places at once (the box, the bus watcher, the TV)
 
 | # | On the box | On `vonbox/#` | On the TV |
 |---|---|---|---|
-| 1 | green **sparkle** + rising two-note **tap chime** (instant, local — before any network) | `-> vonbox/nfc/tapped {"uid":"04462765C82A81"}` | — |
+| 1 | green **sparkle** + rising two-note **tap chime** (instant, local — before any network) | `-> vonbox/nfc/tapped {"uid":"045AED5ECD2A81"}` | — |
 | 2 | ring → blue **loading** chase (if HA takes >0.4s to answer) | `<- vonbox/state {"state":"loading",…}` | TV + soundbar wake, Apple TV wakes |
 | 3 | still loading | — | Plex opens, Mario begins to play |
 | 4 | "movie starting" **triad** + ring → **solid green** | `<- vonbox/state {"state":"playing",…}` *(retained)* | Mario playing |
@@ -142,7 +142,7 @@ repeatably.
 ```bash
 # Fire a tap for the known Mario tag:
 mosquitto_pub -h 192.168.0.123 -u vonbox -P "$VONBOX_PW" \
-  -t vonbox/nfc/tapped -m '{"uid":"04462765C82A81"}'
+  -t vonbox/nfc/tapped -m '{"uid":"045AED5ECD2A81"}'
 ```
 
 | # | Set up this state first | Then tap (or pub) | Expect on `vonbox/state` | Expect on the TV | Box feedback |
@@ -173,7 +173,7 @@ tagged-form payload by hand. All four keys must be present:
 
 ```bash
 mosquitto_pub -h 192.168.0.123 -u vonbox -P "$VONBOX_PW" -t vonbox/state \
-  -m '{"state":"paused","uid":"04462765C82A81","title":"The Super Mario Bros. Movie","reason":null}'
+  -m '{"state":"paused","uid":"045AED5ECD2A81","title":"The Super Mario Bros. Movie","reason":null}'
 ```
 
 Swap `"state"` for any of `idle`, `loading`, `playing`, `already_playing`,
