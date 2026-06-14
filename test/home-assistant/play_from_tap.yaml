@@ -19,9 +19,9 @@ variables:
   # complex-type quirks you hit returning dicts from a template. Keep a UID in
   # BOTH maps when you add a tag.
   uid_to_rating_key:
-    "04462765C82A81": "190"   # The Super Mario Bros. Movie
+    "045AED5ECD2A81": "190"   # The Super Mario Bros. Movie (NTAG inside the Mario Blu-ray box)
   uid_to_title:
-    "04462765C82A81": "The Super Mario Bros. Movie"
+    "045AED5ECD2A81": "The Super Mario Bros. Movie"
   uid: "{{ trigger.payload_json.uid | default('') }}"
   rating_key: "{{ uid_to_rating_key.get(uid, '') }}"
   title: "{{ uid_to_title.get(uid, none) }}"

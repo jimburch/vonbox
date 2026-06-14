@@ -21,7 +21,7 @@ NUM_PIXELS = 24
 # brightness is ~60mA/pixel -> ~1.4A for 24 pixels, more than VSYS/USB can
 # supply. At 0.25 the worst case (all white) is ~360mA, well within budget.
 # Every color is scaled through this before it hits the strip.
-BRIGHTNESS = 0.025
+BRIGHTNESS = 0.05
 
 # Named colors in full-intensity RGB; dim() applies the brightness cap.
 WHITE  = (255, 255, 255)
