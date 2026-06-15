@@ -12,6 +12,18 @@
 > a tag actually starts a movie on the living-room TV under every starting
 > condition — cold, warm, and already-playing.
 
+> **⚠️ Updated 2026-06-15 — playback mechanism changed.** tvOS 26.5 broke the Apple
+> TV Companion app-list, so the `select_source: Plex` + Plex-client `play_media`
+> path this runbook originally described **no longer works**. The automation now
+> plays via a **Plex deep link** (`turn_on` → `remote home` → `play_media` *url* on
+> `media_player.living_room`) and clears the resume point first with a
+> `/:/unscrobble` `rest_command`. See
+> [ADR 0004](./adr/0004-play-plex-via-deep-link-instead-of-select-source.md). The
+> MQTT contract, the tap→state→ring loop, the guards, and every scenario below are
+> unchanged — only HA's internal play steps differ. Note: the `playing` message is
+> **not** retained. Where this doc still narrates the old internals, trust the YAML
+> and ADR 0004.
+
 ## What this proves
 
 The whole loop, nothing mocked:
@@ -21,9 +33,9 @@ NTAG215 tap
    │
    ▼
 Pico 2 WH ──vonbox/nfc/tapped──▶ Mosquitto (Synology) ──▶ Home Assistant (Pi)
-   ▲                                    │                       │ media_player.turn_on
-   │                                    │                       │ select_source: Plex
-   └──────── vonbox/state ◀─────────────┘                       │ play_media: rating key
+   ▲                                    │                       │ turn_on (TV+soundbar via CEC)
+   │                                    │                       │ remote: home
+   └──────── vonbox/state ◀─────────────┘                       │ play_media: plex:// deep link
    (LED ring + buzzer follow the real Apple TV state)           ▼
                                                         TV + soundbar + Apple TV + Plex
 ```
@@ -52,7 +64,7 @@ through the full loop.
 - [ ] MQTT integration configured and **connected to the Synology broker**
       (`192.168.0.123:1883`, user `vonbox`). Settings → Devices & services → MQTT
       should say "connected."
-- [ ] `test/home-assistant/play_from_tap.yaml` loaded as an automation and
+- [ ] `test/home-assistant/vonbox_play_movie.yaml` loaded as an automation and
       enabled. (Settings → Automations, or include the YAML and reload
       automations.) This is the brain — it owns the UID→rating-key map, the
       already-playing guard, and every `vonbox/state` publish.
@@ -68,7 +80,7 @@ through the full loop.
 **Broker** (Synology): Mosquitto container up, user `vonbox` exists.
 
 **Tag:** the production NTAG215 `045AED5ECD2A81` (inside the Mario Blu-ray box) → Plex rating key `190` (The Super
-Mario Bros. Movie), already in `play_from_tap.yaml`'s map.
+Mario Bros. Movie), already in `vonbox_play_movie.yaml`'s map.
 
 ## `secrets.py` — home values
 
@@ -112,10 +124,10 @@ in order:
 4. the **boot flourish** — rising-fifth chime + a warm-white comet lap around the ring
 5. `ready. tap a tag.` and the ring settles to the soft idle breathe
 
-The box is now live on the real broker. (HA's MQTT integration may also publish a
-retained `vonbox/state` of `idle`/`playing` that the Pico renders the instant it
-subscribes — that's expected and is how a mid-movie reboot recovers the right
-ring color.)
+The box is now live on the real broker. (The play automation does **not** retain
+`vonbox/state`, so on (re)subscribe the box stays at its boot `idle` until the next
+live tap or state change — a deliberate choice so a stale `playing` can't
+re-trumpet success on every reconnect.)
 
 ## The happy path — one tap, full cold start
 
@@ -127,15 +139,16 @@ the reader and watch all three places at once (the box, the bus watcher, the TV)
 | 1 | green **sparkle** + rising two-note **tap chime** (instant, local — before any network) | `-> vonbox/nfc/tapped {"uid":"045AED5ECD2A81"}` | — |
 | 2 | ring → blue **loading** chase (if HA takes >0.4s to answer) | `<- vonbox/state {"state":"loading",…}` | TV + soundbar wake, Apple TV wakes |
 | 3 | still loading | — | Plex opens, Mario begins to play |
-| 4 | "movie starting" **triad** + ring → **solid green** | `<- vonbox/state {"state":"playing",…}` *(retained)* | Mario playing |
+| 4 | "movie starting" **triad** + ring → **solid green** (brief, fades to idle) | `<- vonbox/state {"state":"playing",…}` | Mario playing |
 
-That's the entire contract working in one shot. The `playing` message is
-retained, so a box that reboots mid-movie comes straight back to green.
+That's the entire contract working in one shot. The `playing` message is **not**
+retained — green is a brief confirmation that fades back to the dark idle rest, and
+a box that reboots mid-movie comes back to idle (only a live tap turns it green).
 
 ## Scenario matrix — battle-test every entry condition
 
 You don't have to physically re-tap to exercise each branch: a `mosquitto_pub` of
-a tap event hits `play_from_tap.yaml` exactly like a real tap does. Use real taps
+a tap event hits `vonbox_play_movie.yaml` exactly like a real tap does. Use real taps
 to prove the PN532 path, and `mosquitto_pub` to drive the branches quickly and
 repeatably.
 
@@ -154,7 +167,7 @@ mosquitto_pub -h 192.168.0.123 -u vonbox -P "$VONBOX_PW" \
 | 5 | any | bogus UID `{"uid":"04DEADBEEF0000"}` | immediate `error` / `unknown_tag` (no `loading`) | nothing happens | 3 red flashes + descending wah-wah |
 
 **The one that bit us before:** scenario 3. Without the already-playing guard in
-`play_from_tap.yaml`, a re-tap re-issued `play_media` and Plex **restarted the
+`vonbox_play_movie.yaml`, a re-tap re-issued `play_media` and Plex **restarted the
 movie from the beginning** (Phase 1 lesson #9). The guard reads the live Plex
 entity and bails *before* touching anything — so the only correct outcome for a
 re-tap is the soft `already_playing` cue and the movie carrying on untouched.
@@ -180,7 +193,7 @@ Swap `"state"` for any of `idle`, `loading`, `playing`, `already_playing`,
 `paused`, `standby`, `error`. Retain sustained states (`-r`) if you want a
 late-joining box to pick them up; leave transients un-retained.
 
-> Pausing/standby aren't published by `play_from_tap.yaml` — that automation only
+> Pausing/standby aren't published by `vonbox_play_movie.yaml` — that automation only
 > covers the tap → play path. The separate state-watcher automation (watch the
 > Apple TV entity, republish `paused`/`standby` on external changes) is the next
 > step after this matrix passes; until then, use the manual publish above to
@@ -242,7 +255,7 @@ wire it.)
 
 ## See also
 
-- `test/home-assistant/play_from_tap.yaml` — the automation under test.
+- `test/home-assistant/vonbox_play_movie.yaml` — the automation under test.
 - `test/offline-harness/full_loop_test.py` — the Pico firmware (same one used here and away).
 - `lib/feedback.py` — the LED + buzzer renderer; cue constants at the top.
 - `docs/testing-away-from-home.md` — the mocked-back-end version of this loop.

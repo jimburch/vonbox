@@ -1,3 +1,8 @@
+# SUPERSEDED on tvOS 26.5+ (2026-06-15). This webhook uses `select_source: Plex`,
+# which silently no-ops now that tvOS 26.5 broke the Apple TV Companion app-list
+# (home-assistant/core#171666). It will wake the TV but NOT start the movie from
+# cold. Kept as the historical Phase 1 reference. The working play path is the
+# Plex deep link in `vonbox_play_movie.yaml` -- see ADR 0004.
 alias: Play Super Mario Bros Movie webhook
 description: Cold-start — wake Apple TV, launch Plex, play The Super Mario Bros. Movie
 triggers:

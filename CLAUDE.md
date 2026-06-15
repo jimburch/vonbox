@@ -20,14 +20,14 @@ The user is the dad building this for his son Von.
 2. ✅ **PN532 wired and talking** — wired over I2C on GP4 (SDA) / GP5 (SCL), DIP switches set to I2C (`SEL0=OFF, SEL1=ON`), responds at `0x24`, identifies as PN532 firmware 1.6 via raw `GetFirmwareVersion`. Bench scripts in `test/bench/i2c_scan.py` and `test/bench/nfc_firmware_test.py`.
 3. ✅ **Single-shot tap detection** — Polls PN532 at ~10Hz; prints `TAPPED: <UID>` exactly once per tap; suppresses re-fires until the tag is absent ≥2s. Confirmed with NTAG215 sticker `04462765C82A81`. Inline driver in `test/bench/nfc_tap_test.py` (will extract to `lib/pn532.py` during Phase 3).
 
-**Phase 3 ▶️ in progress** — Pico ↔ HA via MQTT.
+**Phase 3 ▶️ core working** — Pico ↔ HA via MQTT; a tap plays the mapped movie from cold sleep (switching + re-tap-no-op included). Remaining: the paused/standby state-watcher automation (step 6).
 
 1. ✅ **Mosquitto reachable from the laptop.** Broker on Synology at `192.168.0.123:1883` (Docker container). User `vonbox` created via `mosquitto_passwd`. `mosquitto_pub`/`mosquitto_sub` work end-to-end from Mac.
 2. ✅ **Pico on Wi-Fi.** Pico associates with SSID `Jabby`, lease `192.168.0.80`, RSSI `-42 dBm`. Credentials in gitignored `secrets.py`. Test script: `test/bench/wifi_test.py`.
 3. ✅ **Pico → MQTT broker.** `test/bench/mqtt_hello_test.py` publishes a heartbeat to `test/hello` every 5s; laptop `mosquitto_sub` receives each message. `umqtt.simple` is *not* frozen into the official `RPI_PICO2_W` build — install once via `test/bench/install_umqtt.py` (calls `mip.install("umqtt.simple")`, writes to `/lib/umqtt/simple.mpy`).
 4. ✅ **`lib/pn532.py` + orchestrator.** Inline driver extracted to `lib/pn532.py` (uploaded to Pico flash); `test/bench/nfc_to_mqtt_test.py` runs the polling + MQTT loop and publishes `{"uid": "<HEX>"}` to `vonbox/nfc/tapped`. Edge-trigger + 2s-absence cooldown preserved. Verified end-to-end with NTAG215 `04462765C82A81`.
-5. ✅ **HA UID→rating-key automation.** `test/home-assistant/play_from_tap.yaml`: triggers on `vonbox/nfc/tapped`, maps UID→rating key (inline `variables:` mapping — add new tags there), runs the Phase 1 cold-start sequence. Includes the Plex Companion warm-up and the retry-only-on-timeout pattern (spec.md Phase 3 lessons #11–#12). Verified: tapping NTAG215 `04462765C82A81` plays Super Mario (rating key `190`) from cold sleep. Unknown UIDs log a warning and stop — publishing the `error` state arrives with step 6.
-6. ▶️ **HA → Pico state sync.** `vonbox/state` drives Pico's session-active tracking and the LED ring. Pico side already proven against the mock HA (`test/offline-harness/full_loop_test.py` + `lib/feedback.py`); the real-HA publishing automations are the new work. *(currently here)*
+5. ✅ **HA UID→movie automation** (`test/home-assistant/vonbox_play_movie.yaml`, renamed from `play_from_tap.yaml`). Triggers on `vonbox/nfc/tapped`, maps UID→Plex rating key (inline `variables:` map — add tags there). **Plays via a Plex deep link, NOT `select_source`:** tvOS 26.5 broke the Apple TV Companion app-list so `select_source` silently no-ops ([ADR 0004](./docs/adr/0004-play-plex-via-deep-link-instead-of-select-source.md), home-assistant/core#171666). Sequence: `turn_on` (wakes TV+soundbar via CEC) → `remote home` → deep-link `play_media` on `media_player.living_room` (`media_content_id: plex://play/?metadataKey=/library/metadata/<key>&metadataType=1&server=<machine_id>`). Guards: unknown UID → `error`; already-playing this movie → `already_playing` no-op (never restarts). Verified end-to-end from cold sleep with Mario `045AED5ECD2A81`. Start-from-the-beginning: `rest_command.plex_mark_unwatched` (Plex `/:/unscrobble`, defined in `configuration.yaml`) clears the server resume point first — unscrobble verified standalone; the automation re-wire awaits one live confirmation tap.
+6. ▶️ **HA → Pico state sync (partial).** The play automation publishes `loading`/`playing`/`already_playing`/`error` to `vonbox/state`; the Pico (`lib/feedback.py`) renders them, verified live. *Still to build:* the state-watcher automation that watches `media_player.living_room` and publishes `paused`/`standby` on external changes (Siri-Remote pause, Apple TV sleep). *(currently here)*
 
 Topic prefix: all project topics use `vonbox/...` (matches the repo name and the Mosquitto user). The MQTT user is `vonbox`; the password lives in `secrets.py` on the Pico and in the HA MQTT integration config.
 
@@ -139,9 +139,11 @@ Local feedback (LED ring, buzzer)                           Living room TV
 | HA URL (LAN) | `http://192.168.0.122:8123` |
 | Apple TV `media_player` entity | `media_player.living_room` |
 | Plex-on-AppleTV `media_player` entity | `media_player.plex_plex_for_apple_tv_apple_tv` |
-| Plex source name (for `select_source`) | `Plex` |
-| Working webhook example | `play_super_mario_movie` |
+| ~~Plex source (`select_source`)~~ | ~~`Plex`~~ — **dead on tvOS 26.5** (Companion app-list broke); play via deep link ([ADR 0004](./docs/adr/0004-play-plex-via-deep-link-instead-of-select-source.md)) |
+| Play mechanism | `media_player.play_media` on `media_player.living_room`, `media_content_type: url`, `media_content_id: plex://play/?metadataKey=/library/metadata/<RATING_KEY>&metadataType=1&server=<MACHINE_ID>` |
+| Plex server machine ID (`server=`) | `e665330f66bf4ac955231fdb44f95287341d2864` (from `curl http://192.168.0.123:32400/identity`) |
 | Movie identifier convention | **Plex rating key (numeric), never title.** Find via Plex web URL: `...details?key=%2Flibrary%2Fmetadata%2F<NUMBER>` |
+| Start-from-beginning | `rest_command.plex_mark_unwatched` → Plex `/:/unscrobble` (clears resume); X-Plex-Token in `configuration.yaml`, not the repo |
 
 ## MicroPython gotchas (don't re-derive these)
 

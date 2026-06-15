@@ -1,0 +1,29 @@
+# Reference copy of the HA Pi's /config/configuration.yaml (the relevant parts).
+# The real file lives on the Pi at ~/docker/homeassistant/configuration.yaml.
+# Keep this in sync by hand when you change top-level HA config. The real token
+# is NOT committed here -- replace MY_TOKEN_HERE on the Pi with the X-Plex-Token
+# (Plex Web -> any movie -> Get Info -> View XML -> copy the token from the URL).
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+automation vonbox: !include_dir_list automations_vonbox/
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# Plex: clear a movie's server-side resume point before the NFC automation plays
+# it, so a tap starts from the beginning. /:/unscrobble marks the item unwatched,
+# which clears its stored viewOffset. Called from
+# automations_vonbox/vonbox_play_movie.yaml with the movie's Plex rating key.
+# Token is local-network only (kept here on the Pi, not in the repo). See ADR 0004.
+# NOTE: the url: value MUST be a single line -- a wrapped scalar injects a space
+# and corrupts the query string.
+rest_command:
+  plex_mark_unwatched:
+    url: "http://192.168.0.123:32400/:/unscrobble?identifier=com.plexapp.plugins.library&key={{ rating_key }}&X-Plex-Token=MY_TOKEN_HERE"
+    method: get
