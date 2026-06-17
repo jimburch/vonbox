@@ -47,14 +47,17 @@ variables:
   #   plex         -> numeric Plex rating key, e.g. "190"
   #   disney_plus  -> full https://www.disneyplus.com/play/<id> URL
   uid_to_source:
-    "045AED5ECD2A81": "plex"          # The Super Mario Bros. Movie (NTAG inside the Mario Blu-ray box)
+    "045AED5ECD2A81": "plex"          # The Super Mario Galaxy Movie (NTAG inside the Mario Blu-ray box)
     "044E4250CE2A81": "disney_plus"   # Frozen (2013)
+    "0416C63D9E6180": "plex"          # Sonic the Hedgehog 3
   uid_to_play_id:
-    "045AED5ECD2A81": "190"
+    "045AED5ECD2A81": "9217"
     "044E4250CE2A81": "https://www.disneyplus.com/play/04c97b72-504b-47f2-9c6f-fe13d9aea82f"
+    "0416C63D9E6180": "6375"
   uid_to_title:
-    "045AED5ECD2A81": "The Super Mario Bros. Movie"
+    "045AED5ECD2A81": "The Super Mario Galaxy Movie"
     "044E4250CE2A81": "Frozen"
+    "0416C63D9E6180": "Sonic the Hedgehog 3"
   uid: "{{ trigger.payload_json.uid | default('') }}"
   source: "{{ uid_to_source.get(uid, '') }}"
   play_id: "{{ uid_to_play_id.get(uid, '') }}"
@@ -270,24 +273,35 @@ actions:
                 timeout: "00:00:25"
                 continue_on_timeout: true
 
-          # Step 3: seek to 0 + publish state. Settle delay matters: a seek
-          # fired the instant state flips to 'playing' lands while Disney+'s
-          # transport overlay is still up, which tvOS Disney+ interprets as
-          # a small relative skip (verified live 2026-06-17 -- the movie
-          # only jumped back a few seconds). 5s gives the overlay time to
-          # dim and the player to enter steady playback; the same seek_to_0
-          # then lands as an absolute jump (manual Developer Tools test
-          # 2026-06-17 confirmed this works on a settled player).
+          # Step 3: pause -> seek to 0 -> play. Pausing forces Disney+ into a
+          # deterministic, seek-friendly state -- a bare seek fired right
+          # after state=playing landed as a small relative skip (Disney+'s
+          # transport overlay was still up; verified live 2026-06-17). It
+          # also mutes the brief resume-point audio the user would otherwise
+          # hear for a second or two, and the seek-bar flash gets absorbed
+          # into the pause overlay instead of stacking a second overlay on
+          # top of normal playback. media_play resumes from 0 cleanly. All
+          # three services are supported on the Apple TV entity for Disney+
+          # (supported_features bits 0/1/14 -- pause/seek/play -- live in
+          # the 450487 mask the user pasted 2026-06-17).
           - if:
               - condition: template
                 value_template: "{{ wait.completed }}"
             then:
-              - delay: "00:00:05"
+              - delay: "00:00:02"
+              - action: media_player.media_pause
+                target:
+                  entity_id: media_player.living_room
+              - delay: "00:00:01"
               - action: media_player.media_seek
                 target:
                   entity_id: media_player.living_room
                 data:
                   seek_position: 0
+              - delay: "00:00:01"
+              - action: media_player.media_play
+                target:
+                  entity_id: media_player.living_room
               - action: mqtt.publish
                 data:
                   topic: vonbox/state
