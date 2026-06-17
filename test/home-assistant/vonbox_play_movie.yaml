@@ -105,22 +105,20 @@ actions:
           payload: "{{ {'state':'already_playing','uid':uid,'title':title,'reason':none} | to_json }}"
       - stop: Already playing this movie (Plex)
 
-  # --- Guard 2b: Disney+ same-movie re-tap (no live entity signal) --------
-  # Disney+ has no always-on HA entity reflecting "is foregrounded + playing
-  # what", so we can't entity-check like Plex. Instead, the automation
-  # records the last successful play in two helpers (input_text +
-  # input_datetime) at the end of each run; this guard blocks a re-tap of
-  # the same UID within the last hour. After ~1h we assume the movie has
-  # ended (or the user genuinely wants a restart) and let it play again.
-  # Known wart: exiting Disney+ early and re-tapping within the window
-  # no-ops instead of restarting -- revisit if it bites Von's workflow.
-  # Helpers required: input_text.vonbox_last_play_uid, input_datetime.vonbox_last_play_at.
+  # --- Guard 2b: Disney+ same-movie re-tap during active playback ---------
+  # Mirror of Guard 2a, keyed on media_player.living_room (the Apple TV
+  # entity). lesson #13 only broke the app-list / select_source path under
+  # tvOS 26.5 -- the now-playing attributes (state, app_id,
+  # media_content_id, media_position*) keep updating reliably. Disney+
+  # reports media_content_id as just the UUID, so we compare against the
+  # last path segment of play_id (full https URL).
   - if:
       - condition: template
         value_template: >-
           {{ source == 'disney_plus'
-             and states('input_text.vonbox_last_play_uid') == uid
-             and (as_timestamp(now()) - as_timestamp(states('input_datetime.vonbox_last_play_at') | default(0))) < 3600 }}
+             and states('media_player.living_room') == 'playing'
+             and state_attr('media_player.living_room', 'app_id') == 'com.disney.disneyplus'
+             and state_attr('media_player.living_room', 'media_content_id') == (play_id | string).split('/') | last }}
     then:
       - action: mqtt.publish
         data:
@@ -180,23 +178,16 @@ actions:
           - condition: template
             value_template: "{{ source == 'disney_plus' }}"
         sequence:
-          # Cold-launch tvOS Disney+ opens the app but drops the deep-link's
-          # content portion (verified live: lands on Disney+ home, doesn't
-          # navigate to the movie). Workaround: fire the URL twice. First fire
-          # warms the app; ~8s later the second fire hits a foregrounded,
-          # URL-ready Disney+ and plays the movie -- the warm-start path the
-          # user observed working. Wart: on a tap when Disney+ is already
-          # foregrounded (rare), the first fire may briefly re-render the
-          # current view before the second one. Revisit if a reliable
-          # foreground-app signal becomes available (lesson #13 broke the
-          # easy one).
-          - action: media_player.play_media
-            target:
-              entity_id: media_player.living_room
-            data:
-              media_content_type: url
-              media_content_id: "{{ play_id }}"
-          - delay: "00:00:08"
+          # Single-fire-with-retry pattern. tvOS Disney+ handles the deep
+          # link differently by app warmth: a warm app plays the URL on the
+          # first fire; a cold-launched app opens but drops the URL's
+          # content portion (lands on Disney+ home). The earlier two-step
+          # warm-up worked for cold but caused the player menu to bounce
+          # in/out on warm taps (verified live 2026-06-17), because the
+          # second fire re-navigated a session already playing the same
+          # content. So we fire once here; the confirm step below watches
+          # media_player.living_room for the live session signal and
+          # re-fires only if it never lights up (cold case).
           - action: media_player.play_media
             target:
               entity_id: media_player.living_room
@@ -232,25 +223,10 @@ actions:
                 data:
                   topic: vonbox/state
                   payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
-              # Record the last successful play for Guard 2b (Disney+ dedupe).
-              # Set on Plex too so the helpers stay coherent across source
-              # switches (Mario then Frozen -> last_play_uid flips to Frozen,
-              # next Mario tap correctly falls through Guard 2b).
-              - action: input_text.set_value
-                target:
-                  entity_id: input_text.vonbox_last_play_uid
-                data:
-                  value: "{{ uid }}"
-              - action: input_datetime.set_datetime
-                target:
-                  entity_id: input_datetime.vonbox_last_play_at
-                data:
-                  datetime: "{{ now().isoformat() }}"
             else:
               # Never reached 'playing' within the window -> treat as a genuine
               # failure (most likely the box didn't wake in time). Box flashes
-              # the red error cue. Helpers NOT updated -- a failed play
-              # shouldn't dedupe the user's next attempt.
+              # the red error cue.
               - action: mqtt.publish
                 data:
                   topic: vonbox/state
@@ -259,21 +235,69 @@ actions:
           - condition: template
             value_template: "{{ source == 'disney_plus' }}"
         sequence:
-          - delay: "00:00:03"
-          - action: mqtt.publish
-            data:
-              topic: vonbox/state
-              payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
-          # Record the last successful play -- this is what Guard 2b checks
-          # to suppress Disney+ re-taps within the next hour.
-          - action: input_text.set_value
-            target:
-              entity_id: input_text.vonbox_last_play_uid
-            data:
-              value: "{{ uid }}"
-          - action: input_datetime.set_datetime
-            target:
-              entity_id: input_datetime.vonbox_last_play_at
-            data:
-              datetime: "{{ now().isoformat() }}"
+          # Step 1: short watch for the first fire to take. Warm Disney+
+          # lights up within a few seconds; cold-launch Disney+ either takes
+          # longer or drops the URL entirely. Live-session check uses
+          # media_player.living_room (lesson #13 only broke select_source's
+          # app-list, not now-playing attributes -- discovered 2026-06-17).
+          # Disney+ reports media_content_id as the bare UUID, so we match
+          # the last path segment of play_id.
+          - wait_template: >-
+              {{ states('media_player.living_room') == 'playing'
+                 and state_attr('media_player.living_room', 'app_id') == 'com.disney.disneyplus'
+                 and state_attr('media_player.living_room', 'media_content_id') == (play_id | string).split('/') | last }}
+            timeout: "00:00:12"
+            continue_on_timeout: true
+
+          # Step 2: cold-launch retry. If the first fire didn't surface the
+          # live Frozen session within 12s, Disney+ swallowed the URL on
+          # cold launch -- by now the app is foregrounded (warm) so re-fire
+          # and wait again.
+          - if:
+              - condition: template
+                value_template: "{{ not wait.completed }}"
+            then:
+              - action: media_player.play_media
+                target:
+                  entity_id: media_player.living_room
+                data:
+                  media_content_type: url
+                  media_content_id: "{{ play_id }}"
+              - wait_template: >-
+                  {{ states('media_player.living_room') == 'playing'
+                     and state_attr('media_player.living_room', 'app_id') == 'com.disney.disneyplus'
+                     and state_attr('media_player.living_room', 'media_content_id') == (play_id | string).split('/') | last }}
+                timeout: "00:00:25"
+                continue_on_timeout: true
+
+          # Step 3: seek to 0 + publish state. Settle delay matters: a seek
+          # fired the instant state flips to 'playing' lands while Disney+'s
+          # transport overlay is still up, which tvOS Disney+ interprets as
+          # a small relative skip (verified live 2026-06-17 -- the movie
+          # only jumped back a few seconds). 5s gives the overlay time to
+          # dim and the player to enter steady playback; the same seek_to_0
+          # then lands as an absolute jump (manual Developer Tools test
+          # 2026-06-17 confirmed this works on a settled player).
+          - if:
+              - condition: template
+                value_template: "{{ wait.completed }}"
+            then:
+              - delay: "00:00:05"
+              - action: media_player.media_seek
+                target:
+                  entity_id: media_player.living_room
+                data:
+                  seek_position: 0
+              - action: mqtt.publish
+                data:
+                  topic: vonbox/state
+                  payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
+            else:
+              # Disney+ never became the live session, even after a retry
+              # -- a real failure (cold launch lost the URL twice, network
+              # hiccup, Apple TV stuck). Box flashes red.
+              - action: mqtt.publish
+                data:
+                  topic: vonbox/state
+                  payload: "{{ {'state':'error','uid':uid,'title':title,'reason':'playback_failed'} | to_json }}"
 mode: single
