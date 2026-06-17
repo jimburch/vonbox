@@ -14,10 +14,11 @@
 # scheme through media_player.play_media on the Apple TV itself
 # (media_content_type: url). That routes through pyatv launch_app -- a DIFFERENT
 # Companion command that tvOS 26.5 did NOT break -- and needs no Plex client
-# registration at all. Caveat: the deep link only fires when the Apple TV is AWAKE
-# at the home screen; it cannot wake a sleeping box and is a no-op from
-# idle/screensaver. So we turn_on (which also wakes the TV + soundbar over CEC)
-# and send `home` first, THEN fire the deep link.
+# registration at all. Caveat: the deep link can't wake a sleeping box, so we
+# turn_on first (which also wakes the TV + soundbar over CEC). A `home` command
+# used to sit between turn_on and play_media on the theory that the deep link
+# no-ops from idle/screensaver -- dropped 2026-06-17 as a cold-start latency
+# experiment; restore it if a screensaver / idle-state tap stops launching Plex.
 id: play_movie_from_nfc_tap
 alias: Play movie from NFC tap
 description: >-
@@ -114,17 +115,7 @@ actions:
     continue_on_timeout: true
   - delay: "00:00:02"
 
-  # 2) Go home. The deep link only fires from an awake/home-screen state, not from
-  # idle/screensaver, so force the home screen first. remote.send_command uses
-  # Companion HID, which tvOS 26.5 did NOT break.
-  - action: remote.send_command
-    target:
-      entity_id: remote.living_room
-    data:
-      command: home
-  - delay: "00:00:03"
-
-  # 3) Launch Plex AND start the movie in one shot via the deep-link URL scheme.
+  # 2) Launch Plex AND start the movie in one shot via the deep-link URL scheme.
   # Start-from-the-beginning is handled by the unscrobble above (the tvOS Plex app
   # ignores a viewOffset param in the URL). Keep the URL on ONE line -- a folded
   # multi-line scalar would inject spaces and corrupt the query string.
