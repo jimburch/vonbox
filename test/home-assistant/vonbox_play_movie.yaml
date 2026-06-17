@@ -5,52 +5,70 @@
 # loop: the UI's media picker rewrites play_media into a `media: { ... }` wrapper.
 # Edit THIS file, then Developer Tools -> YAML -> Reload Automations.
 #
-# PLAYBACK MECHANISM (changed 2026-06-14): tvOS 26.5 broke pyatv's Companion
-# app-list fetch (FetchLaunchableApplicationsEvent times out), which silently
-# killed `select_source: Plex` and, with it, the whole Phase 1 cold-start path:
-# nothing foregrounds Plex -> the Plex client never registers with the server ->
-# play_media on the Plex client has no target. See home-assistant/core#171666.
-# Workaround: launch Plex AND start the movie in ONE shot via Plex's deep-link URL
-# scheme through media_player.play_media on the Apple TV itself
-# (media_content_type: url). That routes through pyatv launch_app -- a DIFFERENT
-# Companion command that tvOS 26.5 did NOT break -- and needs no Plex client
-# registration at all. Caveat: the deep link can't wake a sleeping box, so we
+# PLAYBACK MECHANISM (deep-link 2026-06-14, multi-source 2026-06-17): tvOS 26.5
+# broke pyatv's Companion app-list fetch (FetchLaunchableApplicationsEvent times
+# out), which silently killed `select_source` and the whole Phase 1 cold-start
+# path. See home-assistant/core#171666. Workaround: launch the streaming app AND
+# start the movie in ONE shot via a deep-link URL through media_player.play_media
+# on the Apple TV (media_content_type: url). That routes through pyatv launch_app
+# -- a DIFFERENT Companion command tvOS 26.5 did NOT break -- and needs no
+# per-app client registration. The deep link can't wake a sleeping box, so we
 # turn_on first (which also wakes the TV + soundbar over CEC). A `home` command
 # used to sit between turn_on and play_media on the theory that the deep link
 # no-ops from idle/screensaver -- dropped 2026-06-17 as a cold-start latency
-# experiment; restore it if a screensaver / idle-state tap stops launching Plex.
+# experiment; restore it if a screensaver / idle-state tap stops launching the
+# app.
+#
+# Sources supported (the `source` variable below picks the branch):
+#   plex         play_id = numeric Plex rating key. Resume cleared server-side
+#                via rest_command.plex_mark_unwatched BEFORE play_media (tvOS
+#                Plex ignores viewOffset in the URL; /:/unscrobble is the only
+#                lever that resets the start point -- ADR 0004 / lesson #16).
+#   disney_plus  play_id = full https://www.disneyplus.com/play/<id> URL. No
+#                resume-clear lever (no public Disney+ unwatch API), so the
+#                movie picks up wherever it was last left.
 id: play_movie_from_nfc_tap
 alias: Play movie from NFC tap
 description: >-
-  Tap-to-play. Triggered by vonbox/nfc/tapped, looks up the Plex rating key from a
-  UID->rating-key mapping, wakes the Apple TV, and plays the mapped movie via a
-  Plex deep link. Handles cold (asleep), warm-but-elsewhere (on another app), and
-  already-playing (re-tap is a soft no-op, never a restart). Publishes vonbox/state
-  at each branch so the box's LED ring/buzzer reflect what happened.
+  Tap-to-play. Triggered by vonbox/nfc/tapped, looks up the tag's source +
+  play-id, wakes the Apple TV, and plays the mapped movie via a per-source deep
+  link (Plex rating-key URL for Plex, https URL for Disney+). Handles cold
+  (asleep), warm-but-elsewhere (on another app), and already-playing on Plex
+  (re-tap is a soft no-op, never a restart). Publishes vonbox/state at each
+  branch so the box's LED ring/buzzer reflect what happened.
 triggers:
   - trigger: mqtt
     topic: vonbox/nfc/tapped
 variables:
-  # Bootstrap mapping. Add new tags here as their figurines arrive. Keep a UID in
-  # BOTH maps when you add a tag (HA renders each variables: value as a template,
-  # so flat string->string maps sidestep the native complex-type quirks).
-  uid_to_rating_key:
-    "045AED5ECD2A81": "190"   # The Super Mario Bros. Movie (NTAG inside the Mario Blu-ray box)
+  # Bootstrap mapping. Add new tags here as their figurines arrive. Keep each
+  # UID in ALL THREE maps -- they're parallel string->string dicts (HA renders
+  # each variables: value as a template, so flat string->string maps sidestep
+  # the native complex-type quirks). play_id format varies by source:
+  #   plex         -> numeric Plex rating key, e.g. "190"
+  #   disney_plus  -> full https://www.disneyplus.com/play/<id> URL
+  uid_to_source:
+    "045AED5ECD2A81": "plex"          # The Super Mario Bros. Movie (NTAG inside the Mario Blu-ray box)
+    "044E4250CE2A81": "disney_plus"   # Frozen (2013)
+  uid_to_play_id:
+    "045AED5ECD2A81": "190"
+    "044E4250CE2A81": "https://www.disneyplus.com/play/04c97b72-504b-47f2-9c6f-fe13d9aea82f"
   uid_to_title:
     "045AED5ECD2A81": "The Super Mario Bros. Movie"
+    "044E4250CE2A81": "Frozen"
   uid: "{{ trigger.payload_json.uid | default('') }}"
-  rating_key: "{{ uid_to_rating_key.get(uid, '') }}"
+  source: "{{ uid_to_source.get(uid, '') }}"
+  play_id: "{{ uid_to_play_id.get(uid, '') }}"
   title: "{{ uid_to_title.get(uid, none) }}"
-  # Plex Media Server machine identifier -- the `server=` half of the deep link.
-  # From `curl http://<plex>:32400/identity`. One server, so it's a constant.
+  # Plex Media Server machine identifier -- the `server=` half of the Plex deep
+  # link. From `curl http://<plex>:32400/identity`. One server, so it's a constant.
   plex_machine_id: "e665330f66bf4ac955231fdb44f95287341d2864"
 actions:
   # --- Guard 1: unknown tag ------------------------------------------------
-  # No rating key for this UID. Log for the HA logbook AND tell the box so it can
-  # flash the red error cue. Transient state -> not retained.
+  # No source mapped for this UID. Log for the HA logbook AND tell the box so
+  # it can flash the red error cue. Transient state -> not retained.
   - if:
       - condition: template
-        value_template: "{{ rating_key == '' }}"
+        value_template: "{{ source == '' }}"
     then:
       - action: system_log.write
         data:
@@ -62,47 +80,61 @@ actions:
           payload: "{{ {'state':'error','uid':uid,'title':none,'reason':'unknown_tag'} | to_json }}"
       - stop: Unknown UID
 
-  # --- Guard 2: this movie is already the active session -------------------
-  # Re-tap of the movie already playing/paused -> soft no-op, so a re-tap never
-  # restarts it. Reads the LIVE Plex entity (ground truth); when a movie is
-  # actually playing the Plex client IS registered, so this check is reliable.
-  # The deep-link path may report media_content_id as a bare rating key ("190") or
-  # a full path ("/library/metadata/190"); split('/')|last tolerates both. VERIFY
-  # the real format on the first live play and tighten if needed.
+  # --- Guard 2a: Plex same-movie re-tap during active playback ------------
+  # Re-tap of the Plex movie currently playing -> soft no-op. State must be
+  # 'playing' (not 'paused' -- when the user switches to Disney+, the Plex
+  # client entity can linger on 'paused' with a stale media_content_id, which
+  # used to false-positive a re-tap of the previous Plex movie). The recency
+  # check on media_position_updated_at is the real stale-state catcher:
+  # position updates freeze the moment Plex loses foreground, so anything >60s
+  # old means Plex isn't actually on screen even if state still reads
+  # 'playing'. The deep-link path may report media_content_id as a bare rating
+  # key ("190") or a full path ("/library/metadata/190"); split('/')|last
+  # tolerates both.
   - if:
       - condition: template
         value_template: >-
-          {{ states('media_player.plex_plex_for_apple_tv_apple_tv') in ['playing', 'paused']
-             and (state_attr('media_player.plex_plex_for_apple_tv_apple_tv', 'media_content_id') | string).split('/') | last == rating_key | string }}
+          {{ source == 'plex'
+             and states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing'
+             and (state_attr('media_player.plex_plex_for_apple_tv_apple_tv', 'media_content_id') | string).split('/') | last == play_id | string
+             and (as_timestamp(now()) - as_timestamp(state_attr('media_player.plex_plex_for_apple_tv_apple_tv', 'media_position_updated_at') | default(0))) < 60 }}
     then:
       - action: mqtt.publish
         data:
           topic: vonbox/state
           payload: "{{ {'state':'already_playing','uid':uid,'title':title,'reason':none} | to_json }}"
-      - stop: Already playing this movie
+      - stop: Already playing this movie (Plex)
 
-  # --- Wake + play sequence ------------------------------------------------
-  # Optimistic loading cue the instant we commit -- the ring animates through the
-  # multi-second wake while the TV/soundbar come up over CEC. Transient.
+  # --- Guard 2b: Disney+ same-movie re-tap (no live entity signal) --------
+  # Disney+ has no always-on HA entity reflecting "is foregrounded + playing
+  # what", so we can't entity-check like Plex. Instead, the automation
+  # records the last successful play in two helpers (input_text +
+  # input_datetime) at the end of each run; this guard blocks a re-tap of
+  # the same UID within the last hour. After ~1h we assume the movie has
+  # ended (or the user genuinely wants a restart) and let it play again.
+  # Known wart: exiting Disney+ early and re-tapping within the window
+  # no-ops instead of restarting -- revisit if it bites Von's workflow.
+  # Helpers required: input_text.vonbox_last_play_uid, input_datetime.vonbox_last_play_at.
+  - if:
+      - condition: template
+        value_template: >-
+          {{ source == 'disney_plus'
+             and states('input_text.vonbox_last_play_uid') == uid
+             and (as_timestamp(now()) - as_timestamp(states('input_datetime.vonbox_last_play_at') | default(0))) < 3600 }}
+    then:
+      - action: mqtt.publish
+        data:
+          topic: vonbox/state
+          payload: "{{ {'state':'already_playing','uid':uid,'title':title,'reason':none} | to_json }}"
+      - stop: Already playing this movie (Disney+)
+
+  # --- Wake ----------------------------------------------------------------
+  # Optimistic loading cue the instant we commit -- the ring animates through
+  # the multi-second wake while the TV/soundbar come up over CEC. Transient.
   - action: mqtt.publish
     data:
       topic: vonbox/state
       payload: "{{ {'state':'loading','uid':uid,'title':title,'reason':none} | to_json }}"
-
-  # Start-from-the-beginning: clear Plex's SERVER-SIDE resume point before playing,
-  # via rest_command plex_mark_unwatched (Plex /:/unscrobble). The deep link's own
-  # viewOffset is ignored by tvOS Plex, and media_seek isn't supported by this
-  # client, so the server-side reset is the only lever that works. Fired before the
-  # wake so the server settles by the time the deep link launches ~10s later. The
-  # rest_command (and the X-Plex-Token) live in configuration.yaml on the Pi -- it
-  # MUST be defined there or this aborts (a missing action is NOT caught by
-  # continue_on_error). continue_on_error here only covers a runtime Plex failure:
-  # a hiccup just means the movie resumes instead of restarting, never blocks the
-  # play. Re-taps of the already-playing movie never reach here (Guard 2). ADR 0004.
-  - action: rest_command.plex_mark_unwatched
-    continue_on_error: true
-    data:
-      rating_key: "{{ rating_key }}"
 
   # 1) Power on. turn_on the Apple TV; the TV + soundbar follow over HDMI-CEC.
   - action: media_player.turn_on
@@ -115,41 +147,133 @@ actions:
     continue_on_timeout: true
   - delay: "00:00:02"
 
-  # 2) Launch Plex AND start the movie in one shot via the deep-link URL scheme.
-  # Start-from-the-beginning is handled by the unscrobble above (the tvOS Plex app
-  # ignores a viewOffset param in the URL). Keep the URL on ONE line -- a folded
-  # multi-line scalar would inject spaces and corrupt the query string.
-  - action: media_player.play_media
-    target:
-      entity_id: media_player.living_room
-    data:
-      media_content_type: url
-      media_content_id: "plex://play/?metadataKey=/library/metadata/{{ rating_key }}&metadataType=1&server={{ plex_machine_id }}"
+  # 2) Per-source play. Each branch builds the right deep-link URL and (for
+  # Plex) clears the server resume point first. Keep each media_content_id on
+  # ONE line -- a folded multi-line scalar injects spaces and corrupts the URL.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ source == 'plex' }}"
+        sequence:
+          # Start-from-the-beginning: clear Plex's SERVER-SIDE resume point
+          # before the deep link. /:/unscrobble (mark unwatched) is the only
+          # lever that resets the start point -- the deep link's own viewOffset
+          # is ignored by tvOS Plex, and media_seek isn't supported by this
+          # client. The rest_command (and the X-Plex-Token) live in
+          # configuration.yaml on the Pi -- it MUST be defined there or this
+          # aborts (a missing action is NOT caught by continue_on_error -- see
+          # lesson #17). continue_on_error here only covers a runtime Plex
+          # failure: a hiccup just means the movie resumes instead of
+          # restarting, never blocks the play. Re-taps of the already-playing
+          # movie never reach here (Guard 2). ADR 0004 / lesson #16.
+          - action: rest_command.plex_mark_unwatched
+            continue_on_error: true
+            data:
+              rating_key: "{{ play_id }}"
+          - action: media_player.play_media
+            target:
+              entity_id: media_player.living_room
+            data:
+              media_content_type: url
+              media_content_id: "plex://play/?metadataKey=/library/metadata/{{ play_id }}&metadataType=1&server={{ plex_machine_id }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ source == 'disney_plus' }}"
+        sequence:
+          # Cold-launch tvOS Disney+ opens the app but drops the deep-link's
+          # content portion (verified live: lands on Disney+ home, doesn't
+          # navigate to the movie). Workaround: fire the URL twice. First fire
+          # warms the app; ~8s later the second fire hits a foregrounded,
+          # URL-ready Disney+ and plays the movie -- the warm-start path the
+          # user observed working. Wart: on a tap when Disney+ is already
+          # foregrounded (rare), the first fire may briefly re-render the
+          # current view before the second one. Revisit if a reliable
+          # foreground-app signal becomes available (lesson #13 broke the
+          # easy one).
+          - action: media_player.play_media
+            target:
+              entity_id: media_player.living_room
+            data:
+              media_content_type: url
+              media_content_id: "{{ play_id }}"
+          - delay: "00:00:08"
+          - action: media_player.play_media
+            target:
+              entity_id: media_player.living_room
+            data:
+              media_content_type: url
+              media_content_id: "{{ play_id }}"
 
-  # 4) Confirm. When the movie actually starts, the Plex client registers and goes
-  # 'playing' -- our success signal. An active session registers fast, unlike the
-  # idle case that never registered at all.
-  - wait_template: >-
-      {{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing' }}
-    timeout: "00:00:45"
-    continue_on_timeout: true
-  - if:
-      - condition: template
-        value_template: "{{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing' }}"
-    then:
-      # Confirmed playing -> sustained 'playing'. NOT retained: a retained 'playing'
-      # is redelivered to the box on every (re)subscribe, re-trumpeting success with
-      # no tap and going stale when the movie ends. The box boots to idle and only
-      # goes green on a live tap.
-      - action: mqtt.publish
-        data:
-          topic: vonbox/state
-          payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
-    else:
-      # Never reached 'playing' within the window -> treat as a genuine failure
-      # (most likely the box didn't wake in time). Box flashes the red error cue.
-      - action: mqtt.publish
-        data:
-          topic: vonbox/state
-          payload: "{{ {'state':'error','uid':uid,'title':title,'reason':'playback_failed'} | to_json }}"
+  # 3) Confirm. Plex registers its client entity as 'playing' the moment the
+  # movie actually starts -- a clean success signal. Disney+ has no equivalent
+  # always-on entity (the Apple TV media_player's app-state is unreliable under
+  # tvOS 26.5 -- lesson #13), so for Disney+ we wait a few seconds and publish
+  # 'playing' optimistically. Trade-off: no 'error' cue if a Disney+ tap
+  # silently fails to launch. Revisit if it bites.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ source == 'plex' }}"
+        sequence:
+          - wait_template: >-
+              {{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing' }}
+            timeout: "00:00:45"
+            continue_on_timeout: true
+          - if:
+              - condition: template
+                value_template: "{{ states('media_player.plex_plex_for_apple_tv_apple_tv') == 'playing' }}"
+            then:
+              # Confirmed playing -> sustained 'playing'. NOT retained: a
+              # retained 'playing' is redelivered to the box on every
+              # (re)subscribe, re-trumpeting success with no tap and going
+              # stale when the movie ends. The box boots to idle and only goes
+              # green on a live tap.
+              - action: mqtt.publish
+                data:
+                  topic: vonbox/state
+                  payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
+              # Record the last successful play for Guard 2b (Disney+ dedupe).
+              # Set on Plex too so the helpers stay coherent across source
+              # switches (Mario then Frozen -> last_play_uid flips to Frozen,
+              # next Mario tap correctly falls through Guard 2b).
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.vonbox_last_play_uid
+                data:
+                  value: "{{ uid }}"
+              - action: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.vonbox_last_play_at
+                data:
+                  datetime: "{{ now().isoformat() }}"
+            else:
+              # Never reached 'playing' within the window -> treat as a genuine
+              # failure (most likely the box didn't wake in time). Box flashes
+              # the red error cue. Helpers NOT updated -- a failed play
+              # shouldn't dedupe the user's next attempt.
+              - action: mqtt.publish
+                data:
+                  topic: vonbox/state
+                  payload: "{{ {'state':'error','uid':uid,'title':title,'reason':'playback_failed'} | to_json }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ source == 'disney_plus' }}"
+        sequence:
+          - delay: "00:00:03"
+          - action: mqtt.publish
+            data:
+              topic: vonbox/state
+              payload: "{{ {'state':'playing','uid':uid,'title':title,'reason':none} | to_json }}"
+          # Record the last successful play -- this is what Guard 2b checks
+          # to suppress Disney+ re-taps within the next hour.
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.vonbox_last_play_uid
+            data:
+              value: "{{ uid }}"
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.vonbox_last_play_at
+            data:
+              datetime: "{{ now().isoformat() }}"
 mode: single
