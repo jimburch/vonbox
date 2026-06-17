@@ -44,10 +44,15 @@ a hand-soldered bridge), there's less room for the JST headers, and the
 breadboard row map doesn't transfer directly. The Perma-Proto is the easier
 build for this project.
 
-> **Note on the half-size Perma-Proto's power rails:** unlike a full-size board,
-> it has 4 *shorter* rail segments rather than two full-length rails per side.
-> With only ~9 conductors that's plenty, but lay out the shared GND rail with
-> that in mind.
+> **Note on the half-size Perma-Proto (#571, confirmed):** 3.2" × 2.0"
+> (81 × 51 mm), grid **30 rows × A–J**, with `+`/`−` power rails on each long
+> edge. **v1 does not use the edge rails** — every wire (grounds included) lands
+> directly in a Pico pin's row node, exactly like the current breadboard. So the
+> "shared GND rail" in `CLAUDE.md` is just the Pico's GND-pin rows, one per
+> device: **PN532 → R3 (pin 38), LED ring → R18 (pin 23), buzzer → R13
+> (pin 28)**. No bridge wire, and the rails' mid-board split is irrelevant. The wire-by-wire build (pinout
+> chart, landing map, solder + continuity steps) is in
+> [`assembly-guide.md`](./assembly-guide.md).
 
 ## Connectors and wiring
 
@@ -60,9 +65,9 @@ snip those pins and solder a JST pigtail to each device lead.
 | Item | ~Price | Notes |
 |---|---|---|
 | **JST-XH "Cable Matching Pair" — Adafruit #4874 (4-pin), #4873 (3-pin), #4872 (2-pin)** — *ordered* | $0.95 ea | 4-pin for the PN532 (3V3/GND/SDA/SCL), 3-pin for the ring (VSYS/GND/DIN), 2-pin for the buzzer (S + −; the module's middle VCC pin is unused, so only 2 conductors). Each is a **plug pigtail + receptacle pigtail with wires pre-crimped** — no crimp tool. $2.85 for all three. *Not the #4423 560-pc "Connector Kit" — that's empty housings + loose pins that need a ~$25 crimper* |
-| **Silicone stranded hookup wire, 2 m × 26 AWG** — Adafruit **#1877 red / #1881 black / #1880 green / #1878 blue** — *ordered* | $3.80 | One 2 m length per color (~$0.95 ea). 2 m each is plenty for ~9 short conductors with re-do slack. Red=power, black=GND, green+blue=signal. Flexible silicone won't fight the enclosure; 26 AWG handles the ring's ~360 mA fine |
+| **Silicone stranded hookup wire, 2 m × 26 AWG** — Adafruit **#1877 red / #1881 black / #1880 green / #1878 blue** — *ordered, unused in v1* | $3.80 | Bought to extend the lid leads (PN532, ring) and to swap mismatched JST-pigtail colors to red/black/green/blue. In this build the shipped JST pigtails are long enough to reach from the lid to the base on their own, so no extensions are spliced and the spools stay on the shelf as inventory for a future build. Red=power, black=GND, green+blue=signal. 26 AWG handles the ring's ~360 mA fine when it does get used |
 | Heat-shrink tubing assortment | — | *On hand.* Strain relief at every solder joint |
-| Solid-core wire | $0 | *On hand* — cut existing breadboard jumpers for the short on-protoboard bridges (solid-core sits flatter in the channels than the silicone stranded). Spool option if wanted: Adafruit 22 AWG solid hook-up wire |
+| Solid-core wire | $0 | *On hand, but the v1 layout needs none* — every wire lands directly in a Pico pin's row node (no on-board jumpers/bridges). Keep a few cut jumpers around only in case a future addition ever needs a short bridge; solid-core sits flatter in the channels than silicone stranded. Spool option if wanted: Adafruit 22 AWG solid hook-up wire |
 
 > **The JST junction is a soldered cable-to-cable splice, not a header that
 > mates with the device's pins.** Each matching pair is two pigtails with bare
@@ -134,6 +139,10 @@ enclosure build below. (Roadmap of record stays `spec.md` / `CLAUDE.md` — upda
 those when these milestones close.)
 
 ## Order of operations (so nothing gets soldered twice)
+
+> The detailed, hole-by-hole version of steps 1–2 below — pinout chart, Perma-
+> Proto landing map, and the solder/continuity/bring-up sequence — lives in
+> [`assembly-guide.md`](./assembly-guide.md). This section is the summary.
 
 1. Solder female headers + JST headers to the protoboard; transfer the layout from the `CLAUDE.md` pin table.
 2. Plug the Pico in, connect each device by its JST lead, and re-run the bench scripts (`test/bench/`) one device at a time — same one-variable-at-a-time rule as bring-up.

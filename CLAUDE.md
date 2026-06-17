@@ -101,13 +101,13 @@ Running map of every wired pin — **check this before adding a device so nothin
 | PN532 NFC | 3V3 | **R5** | 36 | 3V3(OUT) |
 | PN532 NFC | GND | **R3** | 38 | GND |
 | LED ring | 5V (PWR) | **R2** | 39 | VSYS |
-| LED ring | GND | **R3** | 38 | GND *(shared common ground)* |
+| LED ring | GND | **R18** | 23 | GND |
 | LED ring | DIN | **R7** | 34 | GP28 |
 | Buzzer (KY-006) | S (signal) | **R12** | 29 | GP22 |
 | Buzzer (KY-006) | − (GND) | **R13** | 28 | GND |
 
 Notes:
-- **Ground is a shared rail** — any device's GND can land in any free hole of a GND row. The ring shares the PN532's ground at R3; the buzzer uses **R13** (pin 28); **R8** (pin 33) is still a free GND hole.
+- **Ground is a shared net** — all eight GND pins are the same node, so any device's GND can land in any GND row (the edge power rails are *not* used; this is "shared rail" in the loose sense). v1 gives each device its own GND pin for tidiness: PN532 at **R3** (pin 38), ring at **R18** (pin 23), buzzer at **R13** (pin 28). The ring (~360 mA) is kept off **R8** (pin 33) because that's `AGND` — leave it as a spare and prefer a plain GND for any current-carrying device. Left-side GND rows (L3/L8/L13/L18) are also free.
 - **R4 (pin 37) is `3V3_EN`, not ground.** ⚠️ Never wire ground here — it disables the 3.3 V regulator and kills power to the PN532.
 - **I²C bus (GP4/GP5, L6/L7) is shareable.** Only the PN532 is on it in v1; a future OLED (cut from v1 — [ADR 0003](./docs/adr/0003-drop-oled-for-v1.md)) would join the *same two pins* — different I²C address, no conflict, no new pins.
 - **Power rails:** VSYS = R2 (pin 39, ~4.7 V, also the future battery rail), VBUS = R1 (pin 40, true 5 V from USB).
