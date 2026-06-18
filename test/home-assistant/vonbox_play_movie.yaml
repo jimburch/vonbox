@@ -50,14 +50,23 @@ variables:
     "045AED5ECD2A81": "plex"          # The Super Mario Galaxy Movie (NTAG inside the Mario Blu-ray box)
     "044E4250CE2A81": "plex"          # Frozen (2013)
     "0416C63D9E6180": "plex"          # Sonic the Hedgehog 3
+    "046F5956CE2A81": "plex"          # Minions
+    "046A5E51CE2A81": "plex"          # Toy Story 4
+    "04B61B51CE2A81": "plex"          # The Nightmare Before Christmas
   uid_to_play_id:
     "045AED5ECD2A81": "9217"
     "044E4250CE2A81": "9340"
     "0416C63D9E6180": "6375"
+    "046F5956CE2A81": "1895"
+    "046A5E51CE2A81": "9354"
+    "04B61B51CE2A81": "2122"
   uid_to_title:
     "045AED5ECD2A81": "The Super Mario Galaxy Movie"
     "044E4250CE2A81": "Frozen"
     "0416C63D9E6180": "Sonic the Hedgehog 3"
+    "046F5956CE2A81": "Minions"
+    "046A5E51CE2A81": "Toy Story 4"
+    "04B61B51CE2A81": "The Nightmare Before Christmas"
   uid: "{{ trigger.payload_json.uid | default('') }}"
   source: "{{ uid_to_source.get(uid, '') }}"
   play_id: "{{ uid_to_play_id.get(uid, '') }}"
