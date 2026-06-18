@@ -1,0 +1,1537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NFC Movie Box — Feedback Emulator</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+         background: #0e0e10; color: #e8e8ea; margin: 0;
+         padding: 24px; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .hint { color: #777; font-size: 12px; margin-bottom: 20px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+       color: #888; margin: 0 0 12px; font-weight: 600; }
+  .section { background: #161618; border-radius: 12px;
+             padding: 18px 22px; margin-bottom: 16px;
+             border: 1px solid #222; }
+  .ring-wrap { display: flex; flex-direction: column; align-items: center;
+               padding: 28px 0 16px; background: #050507; border-radius: 12px;
+               margin-bottom: 16px; border: 1px solid #1a1a1c; }
+  svg.ring { width: 340px; height: 340px; }
+  .current { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+             color: #bbb; font-size: 13px; margin-top: 12px; min-height: 18px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+         margin: 6px 0 14px; }
+  .row:last-child { margin-bottom: 0; }
+  .label { color: #666; font-size: 11px; text-transform: uppercase;
+           letter-spacing: 0.05em; margin-right: 8px; min-width: 96px; }
+  button { background: #1f1f23; color: #e8e8ea; border: 1px solid #2c2c30;
+           padding: 7px 13px; border-radius: 7px; cursor: pointer;
+           font-size: 13px; font-family: inherit; transition: all 0.1s; }
+  button:hover { background: #28282d; border-color: #4a4a52; }
+  button.active { background: #1d3a64; border-color: #3a6ab0; color: #fff; }
+  button.play-cue { padding: 5px 10px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #222; }
+  th { color: #888; font-weight: 500; font-size: 11px;
+       text-transform: uppercase; letter-spacing: 0.05em; }
+  tr:last-child td { border-bottom: none; }
+  td.k { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         color: #9ec; white-space: nowrap; }
+  td.v { color: #ccc; }
+  td.dim { color: #777; }
+  td.btn-cell { text-align: right; width: 80px; }
+  .swatch { display: inline-block; width: 10px; height: 10px;
+            border-radius: 50%; vertical-align: middle; margin-right: 6px;
+            box-shadow: 0 0 6px currentColor; }
+  /* playground extensions */
+  svg.ring circle { cursor: pointer; }
+  .swatch-btn { width: 26px; height: 26px; min-width: 26px; padding: 0;
+                border-radius: 50%; border: 2px solid #2c2c30; cursor: pointer; }
+  .swatch-btn:hover { transform: scale(1.08); border-color: #4a4a52; }
+  .swatch-btn.active { border-color: #fff; box-shadow: 0 0 0 2px #1d3a64; }
+  input[type="color"] { width: 38px; height: 28px; padding: 0; background: transparent;
+                        border: 1px solid #2c2c30; border-radius: 6px; cursor: pointer;
+                        vertical-align: middle; }
+  input[type="range"] { vertical-align: middle; accent-color: #3a6ab0; }
+  .range-row label { display: inline-flex; align-items: center; gap: 6px;
+                     color: #999; font-size: 12px; }
+  .range-row .value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                      color: #bbb; min-width: 60px; display: inline-block; }
+  .brush-current { display: inline-block; width: 22px; height: 22px;
+                   border-radius: 50%; vertical-align: middle; margin-left: 6px;
+                   border: 2px solid #444; box-shadow: 0 0 8px currentColor; }
+  .frame-info { color: #999; font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+  button.tone-btn, button.jingle-btn { padding: 5px 11px; font-size: 12px; }
+  button.danger { color: #f88; }
+  pre.export { background: #0a0a0c; border: 1px solid #222; border-radius: 8px;
+               padding: 10px 12px; margin: 8px 0 0; font-size: 11px;
+               max-height: 180px; overflow: auto; white-space: pre;
+               font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+               color: #bcd; }
+  /* two-column layout: ring on the left (sticky), playground sections on the right.
+     Falls back to a sticky top strip on narrow screens. */
+  .page { display: grid; grid-template-columns: 320px 1fr; gap: 20px;
+          align-items: start; }
+  .page-side { position: sticky; top: 16px; }
+  .page-side .ring-wrap { margin-bottom: 0; padding: 18px 0 12px; }
+  .page-side svg.ring { width: 280px; height: 280px; }
+  @media (max-width: 1000px) {
+    .page { grid-template-columns: 1fr; }
+    .page-side { position: sticky; top: 0; z-index: 10; margin-bottom: 16px;
+                 padding: 6px 14px; background: rgba(14,14,16,0.92);
+                 backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+                 border-bottom: 1px solid #1a1a1c; }
+    .page-side .ring-wrap { padding: 4px 0; background: transparent;
+                            border: none; flex-direction: row; gap: 14px;
+                            justify-content: flex-start; align-items: center; }
+    .page-side svg.ring { width: 150px; height: 150px; flex-shrink: 0; }
+    .page-side .current { margin-top: 0; }
+  }
+</style>
+</head>
+<body>
+
+<h1>NFC Movie Box — feedback emulator</h1>
+<div class="hint">
+  Mirrors <code>lib/feedback.py</code>. Click a state to drive the ring; click
+  a cue to play it through the browser. Click anywhere first if no sound (browser audio gate).
+</div>
+
+<div class="page">
+<div class="page-side">
+
+<div class="ring-wrap">
+  <svg class="ring" id="ring" viewBox="-170 -170 340 340">
+    <defs>
+      <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+        <feMerge>
+          <feMergeNode in="coloredBlur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+    </defs>
+  </svg>
+  <div class="current" id="current">state: idle</div>
+</div>
+
+</div><!-- /.page-side -->
+<div class="page-main">
+
+<div class="section">
+  <h2>Drive a state</h2>
+  <div class="row">
+    <span class="label">sustained</span>
+    <button data-state="idle">idle</button>
+    <button data-state="loading">loading</button>
+    <button data-state="paused">paused</button>
+    <button data-state="standby">standby</button>
+  </div>
+  <div class="row">
+    <span class="label">transient</span>
+    <button data-state="tap_accepted">tap_accepted</button>
+    <button data-state="playing">playing</button>
+    <button data-state="already_playing">already_playing</button>
+    <button data-state="error">error</button>
+  </div>
+  <div class="row">
+    <span class="label">diagnostic</span>
+    <button data-diag="booting">booting</button>
+    <button data-diag="connecting_wifi">connecting_wifi</button>
+    <button data-diag="connecting_mqtt">connecting_mqtt</button>
+    <button data-diag="net_error_wifi">net_error: wifi</button>
+    <button data-diag="net_error_broker">net_error: broker</button>
+  </div>
+  <div class="row">
+    <span class="label">utility</span>
+    <button data-util="boot-flourish">boot() flourish</button>
+    <button data-util="off">off()</button>
+  </div>
+</div>
+
+<div class="section">
+  <h2>State → LED pattern</h2>
+  <table>
+    <tr><th>state</th><th>animation</th><th>color</th></tr>
+    <tr><td class="k">idle</td><td class="v">quiet dark fill (the resting state)</td>
+        <td class="dim">—</td></tr>
+    <tr><td class="k">loading</td><td class="v">single pixel chasing around the ring</td>
+        <td class="v"><span class="swatch" style="color:#5af;background:#5af"></span>blue</td></tr>
+    <tr><td class="k">paused</td><td class="v">breathe, 60-frame triangle</td>
+        <td class="v"><span class="swatch" style="color:#fa6;background:#fa6"></span>amber</td></tr>
+    <tr><td class="k">standby</td><td class="v">slow breathe, 80-frame triangle</td>
+        <td class="v"><span class="swatch" style="color:#fc8;background:#fc8"></span>warm white</td></tr>
+    <tr><td class="k">playing</td><td class="v">solid hold (~2.0s) → fade out (~1.25s) → revert to idle</td>
+        <td class="v"><span class="swatch" style="color:#3f6;background:#3f6"></span>green</td></tr>
+    <tr><td class="k">error</td><td class="v">3× flash → revert</td>
+        <td class="v"><span class="swatch" style="color:#f44;background:#f44"></span>red</td></tr>
+    <tr><td class="k">already_playing</td><td class="v">soft pulse over current sustained color → revert</td>
+        <td class="dim">(current)</td></tr>
+    <tr><td class="k">tap_accepted</td><td class="v">sparkle cluster → settle → revert</td>
+        <td class="v"><span class="swatch" style="color:#3f6;background:#3f6"></span>green</td></tr>
+    <tr><td class="k">booting</td><td class="v">dim steady fill (pre-network "alive")</td>
+        <td class="v"><span class="swatch" style="color:#fc8;background:#fc8"></span>warm white</td></tr>
+    <tr><td class="k">connecting_wifi</td><td class="v">slow breathe (associating)</td>
+        <td class="v"><span class="swatch" style="color:#5af;background:#5af"></span>blue</td></tr>
+    <tr><td class="k">connecting_mqtt</td><td class="v">dot chasing the ring (reaching broker)</td>
+        <td class="v"><span class="swatch" style="color:#5af;background:#5af"></span>blue</td></tr>
+    <tr><td class="k">net_error: wifi</td><td class="v">double-blink pattern (no router link)</td>
+        <td class="v"><span class="swatch" style="color:#fa6;background:#fa6"></span>amber</td></tr>
+    <tr><td class="k">net_error: broker</td><td class="v">breathe (router up, broker down)</td>
+        <td class="v"><span class="swatch" style="color:#c5f;background:#c5f"></span>purple</td></tr>
+  </table>
+</div>
+
+<div class="section">
+  <h2>LED — pattern library</h2>
+  <div class="hint">
+    Pick a color, click an animation. Click any state above (idle / loading / off / etc.) to exit.
+  </div>
+  <div class="row">
+    <span class="label">color</span>
+    <button class="swatch-btn active" data-anim-color="255,255,255" style="background:#fff" title="white"></button>
+    <button class="swatch-btn" data-anim-color="255,0,0"     style="background:#f44"     title="red"></button>
+    <button class="swatch-btn" data-anim-color="255,120,0"   style="background:#ff7800"  title="orange"></button>
+    <button class="swatch-btn" data-anim-color="255,210,0"   style="background:#ffd200"  title="yellow"></button>
+    <button class="swatch-btn" data-anim-color="0,255,80"    style="background:#0f5"     title="green"></button>
+    <button class="swatch-btn" data-anim-color="0,230,230"   style="background:#0ee"     title="cyan"></button>
+    <button class="swatch-btn" data-anim-color="60,140,255"  style="background:#3c8cff"  title="blue"></button>
+    <button class="swatch-btn" data-anim-color="160,0,255"   style="background:#a000ff"  title="purple"></button>
+    <button class="swatch-btn" data-anim-color="255,0,180"   style="background:#ff00b4"  title="pink"></button>
+    <button class="swatch-btn" data-anim-color="255,160,60"  style="background:#ffa03c"  title="warm white"></button>
+    <input type="color" id="patternColor" value="#ffffff" title="custom color">
+  </div>
+  <div class="row">
+    <span class="label">basic</span>
+    <button data-pattern="solid">solid</button>
+    <button data-pattern="wipe">wipe</button>
+    <button data-pattern="comet">comet</button>
+    <button data-pattern="chase">theater chase</button>
+    <button data-pattern="breathe">breathe</button>
+    <button data-pattern="pulse">pulse</button>
+    <button data-pattern="blink">blink</button>
+  </div>
+  <div class="row">
+    <span class="label">motion</span>
+    <button data-pattern="scanner">scanner (KITT)</button>
+    <button data-pattern="pinwheel">pinwheel</button>
+    <button data-pattern="gradient">gradient sweep</button>
+    <button data-pattern="running">running lights</button>
+    <button data-pattern="radar">radar sweep</button>
+    <button data-pattern="bounce">bounce</button>
+  </div>
+  <div class="row">
+    <span class="label">special</span>
+    <button data-pattern="rainbow">rainbow</button>
+    <button data-pattern="rainbowChase">rainbow chase</button>
+    <button data-pattern="twinkle">twinkle</button>
+    <button data-pattern="fire">fire flicker</button>
+    <button data-pattern="police">police</button>
+    <button data-pattern="confetti">confetti</button>
+    <button data-pattern="meteor">meteor</button>
+    <button data-pattern="larson">larson scanner</button>
+  </div>
+</div>
+
+<div class="section">
+  <h2>LED — sandbox</h2>
+  <div class="hint">
+    Pick a brush, click pixels on the ring above to paint. Click a painted pixel again to clear it.
+    Save snapshots and play them back as an animation.
+  </div>
+  <div class="row">
+    <span class="label">brush</span>
+    <button class="swatch-btn active" data-brush="255,0,0"     style="background:#f44"></button>
+    <button class="swatch-btn" data-brush="255,120,0"   style="background:#ff7800"></button>
+    <button class="swatch-btn" data-brush="255,210,0"   style="background:#ffd200"></button>
+    <button class="swatch-btn" data-brush="0,255,80"    style="background:#0f5"></button>
+    <button class="swatch-btn" data-brush="0,230,230"   style="background:#0ee"></button>
+    <button class="swatch-btn" data-brush="60,140,255"  style="background:#3c8cff"></button>
+    <button class="swatch-btn" data-brush="160,0,255"   style="background:#a000ff"></button>
+    <button class="swatch-btn" data-brush="255,0,180"   style="background:#ff00b4"></button>
+    <button class="swatch-btn" data-brush="255,255,255" style="background:#fff"></button>
+    <input type="color" id="customBrush" value="#ff0000" title="custom brush color">
+    <span class="brush-current" id="brushCurrent" style="background:#ff0000;color:#ff0000;"></span>
+  </div>
+  <div class="row">
+    <span class="label">canvas</span>
+    <button data-sandbox="fill">fill all</button>
+    <button data-sandbox="clear">clear</button>
+    <button data-sandbox="random">randomize</button>
+    <button data-sandbox="rotate">rotate ↻</button>
+    <button data-sandbox="invert">invert</button>
+  </div>
+  <div class="row range-row">
+    <span class="label">animation</span>
+    <button data-sandbox="snapshot">+ snapshot</button>
+    <button data-sandbox="play">▶ play</button>
+    <button data-sandbox="stop">■ stop</button>
+    <button data-sandbox="clearframes" class="danger">delete frames</button>
+    <span class="frame-info" id="frameInfo">0 frames</span>
+    <label>speed: <input type="range" id="frameSpeed" min="60" max="800" value="220" step="10">
+      <span class="value" id="frameSpeedLabel">220 ms</span></label>
+  </div>
+  <div class="row">
+    <span class="label">export</span>
+    <button data-sandbox="export">copy as Python</button>
+    <span class="hint" id="exportStatus" style="margin-left:8px"></span>
+  </div>
+  <pre class="export" id="exportPane" style="display:none"></pre>
+</div>
+
+<div class="section">
+  <h2>Buzzer — free tone</h2>
+  <div class="hint">Drag the sliders to pick a frequency and length, then play. Useful for finding tones to drop into <code>lib/feedback.py</code>.</div>
+  <div class="row range-row">
+    <span class="label">tone</span>
+    <label>freq: <input type="range" id="freqSlider" min="100" max="4000" value="880" step="1">
+      <span class="value" id="freqLabel">880 Hz</span></label>
+    <label>ms: <input type="range" id="durSlider"  min="40"  max="2000" value="200" step="10">
+      <span class="value" id="durLabel">200 ms</span></label>
+    <button id="playFreq">▶ play</button>
+  </div>
+  <div class="row">
+    <span class="label">blips</span>
+    <button class="tone-btn" data-tone="blip">blip</button>
+    <button class="tone-btn" data-tone="boop">boop</button>
+    <button class="tone-btn" data-tone="ding">ding</button>
+    <button class="tone-btn" data-tone="ping">ping</button>
+    <button class="tone-btn" data-tone="thud">thud</button>
+    <button class="tone-btn" data-tone="click">click</button>
+    <button class="tone-btn" data-tone="pop">pop</button>
+  </div>
+  <div class="row">
+    <span class="label">sweeps</span>
+    <button class="tone-btn" data-tone="chirpUp">chirp up</button>
+    <button class="tone-btn" data-tone="chirpDown">chirp down</button>
+    <button class="tone-btn" data-tone="swoop">swoop</button>
+    <button class="tone-btn" data-tone="whistle">whistle</button>
+    <button class="tone-btn" data-tone="laser">laser</button>
+    <button class="tone-btn" data-tone="ufo">UFO</button>
+  </div>
+  <div class="row">
+    <span class="label">repeated</span>
+    <button class="tone-btn" data-tone="buzz">buzz</button>
+    <button class="tone-btn" data-tone="siren">siren</button>
+    <button class="tone-btn" data-tone="phaser">phaser</button>
+    <button class="tone-btn" data-tone="alarm">alarm</button>
+    <button class="tone-btn" data-tone="r2d2">R2-D2 chatter</button>
+  </div>
+  <div class="row">
+    <span class="label">chimes</span>
+    <button class="tone-btn" data-tone="riseTriad">rising triad</button>
+    <button class="tone-btn" data-tone="fallTriad">falling triad</button>
+    <button class="tone-btn" data-tone="majorArp">major arp</button>
+    <button class="tone-btn" data-tone="minorArp">minor arp</button>
+    <button class="tone-btn" data-tone="fifth">perfect fifth</button>
+    <button class="tone-btn" data-tone="octave">octave hop</button>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Buzzer — movie & cartoon jingles</h2>
+  <div class="hint">
+    Each is a single-voice melody that survives on a square-wave piezo. Any of these can be lifted into
+    <code>lib/feedback.py</code> as a CUE — same <code>[(freq_hz, duration_ms), …]</code> shape.
+  </div>
+  <table>
+    <tr><th>name</th><th>vibe</th><th></th></tr>
+    <tr><td class="k">Mario coin</td>            <td class="v">classic NES collect — B5 → E6</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="mario_coin">▶ play</button></td></tr>
+    <tr><td class="k">Mario 1-up</td>            <td class="v">rapid rising arpeggio — got an extra life</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="mario_1up">▶ play</button></td></tr>
+    <tr><td class="k">Mario power-up</td>        <td class="v">stair-step run up the scale (mushroom!)</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="mario_powerup">▶ play</button></td></tr>
+    <tr><td class="k">Mario theme (intro)</td>   <td class="v">first 4 bars — da-da-da, da-DA</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="mario_theme">▶ play</button></td></tr>
+    <tr><td class="k">Mario death</td>           <td class="v">aw-no descending lose-life cue</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="mario_death">▶ play</button></td></tr>
+    <tr><td class="k">Zelda secret</td>          <td class="v">8-note treasure chest reveal</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="zelda_secret">▶ play</button></td></tr>
+    <tr><td class="k">Tetris (A theme)</td>      <td class="v">Korobeiniki opener — 6 notes</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="tetris">▶ play</button></td></tr>
+    <tr><td class="k">Pac-Man chirp</td>         <td class="v">wakka-wakka quick</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="pacman">▶ play</button></td></tr>
+    <tr><td class="k">Pokemon heal</td>          <td class="v">Center cure — D F♯ A D</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="pokemon_heal">▶ play</button></td></tr>
+    <tr><td class="k">Star Wars main</td>        <td class="v">heroic open — D-D-D-G-D</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="star_wars">▶ play</button></td></tr>
+    <tr><td class="k">Imperial March</td>        <td class="v">G-G-G E♭-B♭-G — Vader walking in</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="imperial">▶ play</button></td></tr>
+    <tr><td class="k">Indiana Jones</td>         <td class="v">Raiders march opener</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="indiana">▶ play</button></td></tr>
+    <tr><td class="k">Beethoven's 5th</td>       <td class="v">da-da-da-DUM — destiny knocks</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="beethoven_5th">▶ play</button></td></tr>
+    <tr><td class="k">Twinkle Twinkle</td>       <td class="v">first line, bedtime mode</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="twinkle">▶ play</button></td></tr>
+    <tr><td class="k">Happy Birthday</td>        <td class="v">first phrase</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="happy_birthday">▶ play</button></td></tr>
+    <tr><td class="k">Shave & a Haircut</td>     <td class="v">call without the "two bits" answer</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="shave_haircut">▶ play</button></td></tr>
+    <tr><td class="k">Ghostbusters</td>          <td class="v">"who you gonna call" hook</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="ghostbusters">▶ play</button></td></tr>
+    <tr><td class="k">Game over (8-bit)</td>     <td class="v">slow descending fail</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="game_over">▶ play</button></td></tr>
+    <tr><td class="k">Level up</td>              <td class="v">bright C-E-G-C major arp finish</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="level_up">▶ play</button></td></tr>
+    <tr><td class="k">Fanfare</td>               <td class="v">trumpet-style victory hit</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="fanfare">▶ play</button></td></tr>
+    <tr><td class="k">Jeopardy think</td>        <td class="v">first half of the think-cue loop</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="jeopardy">▶ play</button></td></tr>
+    <tr><td class="k">Close Encounters</td>      <td class="v">5-note alien hello — D-E-C-C-G</td>
+        <td class="btn-cell"><button class="jingle-btn" data-jingle="close_encounters">▶ play</button></td></tr>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Buzzer cues</h2>
+  <table>
+    <tr><th>cue</th><th>fires on</th><th>notes</th><th></th></tr>
+    <tr>
+      <td class="k">CHIME_BOOT</td>
+      <td class="v">boot()</td>
+      <td class="v">A4 140ms → E5 240ms — calm rising fifth</td>
+      <td class="btn-cell"><button class="play-cue" data-cue="boot">▶ play</button></td>
+    </tr>
+    <tr>
+      <td class="k">CHIME_TAP</td>
+      <td class="v">tap_accepted</td>
+      <td class="v">B5 80ms → E6 200ms — rising two-note "got it"</td>
+      <td class="btn-cell"><button class="play-cue" data-cue="tap">▶ play</button></td>
+    </tr>
+    <tr>
+      <td class="k">CHIME_PLAYING</td>
+      <td class="v">playing</td>
+      <td class="v">C6 → E6 → G6 — bright rising triad</td>
+      <td class="btn-cell"><button class="play-cue" data-cue="playing">▶ play</button></td>
+    </tr>
+    <tr>
+      <td class="k">NOTE_ALREADY_PLAYING</td>
+      <td class="v">already_playing</td>
+      <td class="v">A5 150ms — single soft mid-note</td>
+      <td class="btn-cell"><button class="play-cue" data-cue="already">▶ play</button></td>
+    </tr>
+    <tr>
+      <td class="k">TONE_ERROR_DESCENDING</td>
+      <td class="v">error</td>
+      <td class="v">A3 → (rest) → F3 — low descending "wah-wah"</td>
+      <td class="btn-cell"><button class="play-cue" data-cue="error">▶ play</button></td>
+    </tr>
+  </table>
+</div>
+
+</div><!-- /.page-main -->
+</div><!-- /.page -->
+
+<script>
+"use strict";
+
+// --- constants mirrored from lib/feedback.py ---------------------------------
+
+const NUM_PIXELS = 24;
+const BRIGHTNESS = 0.25;
+
+const C = {
+  WARM_WHITE: [255, 160, 60],
+  GREEN:      [0,   255, 0],
+  BLUE:       [0,   0,   255],
+  AMBER:      [255, 120, 0],
+  RED:        [255, 0,   0],
+  PURPLE:     [160, 0,   255],
+  OFF:        [0,   0,   0],
+};
+
+const SUSTAINED = ["idle", "loading", "paused", "standby"];
+
+const INTERVAL = {
+  idle: 40, loading: 40, paused: 45, standby: 90, transient: 45, diag: 40,
+};
+const BREATHE_FRAMES = { paused: 60, standby: 80 };
+
+const LEVEL = {
+  idle:    0.10 / BRIGHTNESS,
+  loading: 0.30 / BRIGHTNESS,
+  playing: 0.20 / BRIGHTNESS,
+  paused:  0.15 / BRIGHTNESS,
+  standby: 0.05 / BRIGHTNESS,
+  error:   0.40 / BRIGHTNESS,
+  sparkle: 0.25 / BRIGHTNESS,
+};
+
+const ERROR_FLASHES = 3;
+const ERROR_FRAMES_PER_FLASH = 8;
+const ERROR_TOTAL_FRAMES = ERROR_FLASHES * ERROR_FRAMES_PER_FLASH;
+const PULSE_FRAMES = 24;
+const SPARKLE_FRAMES = 14;
+const PLAYING_HOLD_FRAMES = 44;
+const PLAYING_FADE_FRAMES = 28;
+const PLAYING_TOTAL = PLAYING_HOLD_FRAMES + PLAYING_FADE_FRAMES;
+
+const DIAG_BOOT_LEVEL    = 0.12 / BRIGHTNESS;
+const DIAG_CONNECT_LEVEL = 0.30 / BRIGHTNESS;
+const DIAG_WIFI_FRAMES   = 50;
+const DIAG_BLINK_PERIOD  = 24;
+const DIAG_BROKER_FRAMES = 36;
+const DIAG_BROKER_LEVEL  = 0.35 / BRIGHTNESS;
+
+const CUES = {
+  boot:    [[440, 140], [659, 240]],
+  tap:     [[988, 80],  [1319, 200]],
+  playing: [[1047, 70], [1319, 70], [1568, 160]],
+  already: [[880, 150]],
+  error:   [[220, 150], [0, 20],    [175, 200]],
+};
+
+// --- buzzer (Web Audio square wave) ------------------------------------------
+
+const buzzer = {
+  ctx: null,
+  active: null,
+
+  ensureCtx() {
+    if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.ctx.state === "suspended") this.ctx.resume();
+  },
+
+  stop() {
+    if (!this.active) return;
+    try { this.active.osc.stop(); } catch (e) {}
+    this.active.osc.disconnect();
+    this.active.gain.disconnect();
+    this.active = null;
+  },
+
+  play(cue) {
+    this.ensureCtx();
+    this.stop();
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    gain.connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    osc.type = "square"; // piezo-ish timbre
+    osc.frequency.value = cue[0][0] || 1;
+    osc.connect(gain);
+    osc.start(now);
+
+    let t = now;
+    const vol = 0.08;
+    for (const [freq, ms] of cue) {
+      const dur = ms / 1000;
+      if (freq === 0) {
+        gain.gain.setValueAtTime(0, t);
+      } else {
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(vol, t);
+      }
+      t += dur;
+    }
+    gain.gain.setValueAtTime(0, t);
+    osc.stop(t + 0.02);
+    this.active = { osc, gain };
+  },
+};
+
+// --- LED ring renderer (state machine mirrors Feedback class) -----------------
+
+class Feedback {
+  constructor(svg) {
+    this.svg = svg;
+    this.pixels = [];
+    this.colors = new Array(NUM_PIXELS).fill(C.OFF);
+    this.current_state = "idle";
+    this.transient = null;
+    this.revert_to = "idle";
+    this.frame = 0;
+    this.last_frame = performance.now();
+    this.diag_mode = null;
+    this.diag_leg = null;
+    this.diag_frame = 0;
+    this.frozen = false; // when true, playground/sandbox owns the ring; tick() is a no-op
+    this._build_ring();
+    this._write();
+  }
+
+  _build_ring() {
+    const r = 132;
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const a = -Math.PI / 2 + (i / NUM_PIXELS) * Math.PI * 2;
+      const cx = Math.cos(a) * r;
+      const cy = Math.sin(a) * r;
+      const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      c.setAttribute("cx", cx);
+      c.setAttribute("cy", cy);
+      c.setAttribute("r", 13);
+      c.setAttribute("fill", "#111");
+      c.setAttribute("stroke", "#262628");
+      c.setAttribute("stroke-width", "1");
+      c.setAttribute("data-pixel-index", i);
+      this.svg.appendChild(c);
+      this.pixels.push(c);
+    }
+  }
+
+  set_state(state) {
+    this.diag_mode = null;
+    if (state === "error") {
+      buzzer.play(CUES.error);
+      this._enter_transient("error");
+      return;
+    }
+    if (state === "already_playing") {
+      buzzer.play(CUES.already);
+      this._enter_transient("already_playing");
+      return;
+    }
+    if (state === "tap_accepted") {
+      buzzer.play(CUES.tap);
+      this._enter_transient("tap_accepted");
+      return;
+    }
+    if (state === "playing") {
+      if (this.transient !== "playing") buzzer.play(CUES.playing);
+      this.current_state = "idle";
+      this._enter_transient("playing");
+      return;
+    }
+    if (SUSTAINED.includes(state)) {
+      this.current_state = state;
+      this.revert_to = state;
+      this.transient = null;
+      this.frame = 0;
+      this.last_frame = performance.now();
+    }
+  }
+
+  set_diag(mode, leg) {
+    this.diag_mode = mode;
+    this.diag_leg = leg || null;
+    this.transient = null;
+    this.diag_frame = 0;
+    this.last_frame = performance.now();
+  }
+
+  off() {
+    this.diag_mode = null;
+    this.transient = null;
+    this.current_state = "idle";
+    this.revert_to = "idle";
+    this.frame = 0;
+    for (let i = 0; i < NUM_PIXELS; i++) this.colors[i] = C.OFF;
+    this._write();
+    buzzer.stop();
+  }
+
+  boot_flourish() {
+    this.off();
+    buzzer.play(CUES.boot);
+    // Animate a single warm-white comet sweep (28ms/step, no wrap).
+    const tail = 6;
+    const total = NUM_PIXELS + tail;
+    let step = 0;
+    const stepMs = 28;
+    const handle = setInterval(() => {
+      for (let i = 0; i < NUM_PIXELS; i++) this.colors[i] = C.OFF;
+      for (let t = 0; t < tail; t++) {
+        const idx = step - t;
+        if (idx < 0 || idx >= NUM_PIXELS) continue;
+        const falloff = (tail - t) / tail;
+        this.colors[idx] = this._scale(C.WARM_WHITE, 0.9 * falloff);
+      }
+      this._write();
+      step++;
+      if (step >= total) {
+        clearInterval(handle);
+        for (let i = 0; i < NUM_PIXELS; i++) this.colors[i] = C.OFF;
+        this._write();
+      }
+    }, stepMs);
+  }
+
+  _enter_transient(name) {
+    this.revert_to = this.current_state;
+    this.transient = name;
+    this.frame = 0;
+    this.last_frame = performance.now();
+  }
+
+  _transient_len() {
+    if (this.transient === "error") return ERROR_TOTAL_FRAMES;
+    if (this.transient === "already_playing") return PULSE_FRAMES;
+    if (this.transient === "tap_accepted") return SPARKLE_FRAMES;
+    if (this.transient === "playing") return PLAYING_TOTAL;
+    return 0;
+  }
+
+  _interval() {
+    if (this.diag_mode) return INTERVAL.diag;
+    if (this.transient) return INTERVAL.transient;
+    return INTERVAL[this.current_state] || INTERVAL.idle;
+  }
+
+  tick() {
+    if (this.frozen) return;
+    const now = performance.now();
+    if (now - this.last_frame < this._interval()) return;
+    this.last_frame = now;
+
+    if (this.diag_mode) {
+      this._render_diag();
+      this._write();
+      this.diag_frame++;
+      return;
+    }
+
+    this._render_frame();
+    this._write();
+    this.frame++;
+
+    if (this.transient && this.frame >= this._transient_len()) {
+      this.transient = null;
+      this.frame = 0;
+    }
+  }
+
+  _render_frame() {
+    if (this.transient === "error") return this._frame_error();
+    if (this.transient === "already_playing") return this._frame_pulse(this.revert_to);
+    if (this.transient === "tap_accepted") return this._frame_sparkle();
+    if (this.transient === "playing") return this._frame_play_confirm();
+
+    const s = this.current_state;
+    if (s === "idle")    return this._frame_fill(C.OFF, 1.0);
+    if (s === "loading") return this._frame_chase(C.BLUE, LEVEL.loading);
+    if (s === "paused")  return this._frame_breathe(C.AMBER, BREATHE_FRAMES.paused, LEVEL.paused);
+    if (s === "standby") return this._frame_breathe(C.WARM_WHITE, BREATHE_FRAMES.standby, LEVEL.standby);
+  }
+
+  _render_diag() {
+    if (this.diag_mode === "booting") {
+      this._frame_fill(C.WARM_WHITE, DIAG_BOOT_LEVEL);
+    } else if (this.diag_mode === "connecting_wifi") {
+      this._diag_breathe(C.BLUE, DIAG_WIFI_FRAMES, DIAG_CONNECT_LEVEL);
+    } else if (this.diag_mode === "connecting_mqtt") {
+      const head = this.diag_frame % NUM_PIXELS;
+      const on = this._scale(C.BLUE, DIAG_CONNECT_LEVEL);
+      for (let i = 0; i < NUM_PIXELS; i++) this.colors[i] = i === head ? on : C.OFF;
+    } else if (this.diag_mode === "net_error") {
+      if (this.diag_leg === "wifi") {
+        const phase = this.diag_frame % DIAG_BLINK_PERIOD;
+        if (phase < 3 || (phase >= 5 && phase < 8)) {
+          this._frame_fill(C.AMBER, DIAG_CONNECT_LEVEL);
+        } else {
+          this._frame_fill(C.OFF, 1.0);
+        }
+      } else {
+        this._diag_breathe(C.PURPLE, DIAG_BROKER_FRAMES, DIAG_BROKER_LEVEL);
+      }
+    }
+  }
+
+  _diag_breathe(color, period, peak) {
+    const half = Math.floor(period / 2);
+    const phase = this.diag_frame % period;
+    const tri = phase <= half ? phase : (period - phase);
+    const level = half ? (tri / half) * peak : 0;
+    this._frame_fill(color, level);
+  }
+
+  _frame_fill(color, level) {
+    const c = this._scale(color, level);
+    for (let i = 0; i < NUM_PIXELS; i++) this.colors[i] = c;
+  }
+
+  _frame_breathe(color, period, peak) {
+    const half = Math.floor(period / 2);
+    const phase = this.frame % period;
+    const tri = phase <= half ? phase : (period - phase);
+    const level = half ? (tri / half) * peak : 0;
+    this._frame_fill(color, level);
+  }
+
+  _frame_chase(color, level) {
+    const head = this.frame % NUM_PIXELS;
+    const on = this._scale(color, level);
+    for (let i = 0; i < NUM_PIXELS; i++) this.colors[i] = i === head ? on : C.OFF;
+  }
+
+  _frame_sparkle() {
+    for (let i = 0; i < NUM_PIXELS; i++) this.colors[i] = C.OFF;
+    if (this.frame >= SPARKLE_FRAMES - 1) {
+      this._frame_fill(C.GREEN, 0.4 * LEVEL.sparkle);
+      return;
+    }
+    const base = (this.frame * 7) % NUM_PIXELS;
+    const on = this._scale(C.GREEN, LEVEL.sparkle);
+    for (let k = 0; k < 3; k++) this.colors[(base + k * 7) % NUM_PIXELS] = on;
+  }
+
+  _frame_play_confirm() {
+    if (this.frame < PLAYING_HOLD_FRAMES) {
+      this._frame_fill(C.GREEN, LEVEL.playing);
+    } else {
+      let remaining = (PLAYING_TOTAL - this.frame) / PLAYING_FADE_FRAMES;
+      if (remaining < 0) remaining = 0;
+      this._frame_fill(C.GREEN, LEVEL.playing * remaining);
+    }
+  }
+
+  _frame_pulse(base_state) {
+    const color = this._color_for_state(base_state);
+    const half = Math.floor(PULSE_FRAMES / 2);
+    const tri = this.frame <= half ? this.frame : (PULSE_FRAMES - this.frame);
+    let peak = this._level_for_state(base_state) * 1.5;
+    if (peak > 1.0) peak = 1.0;
+    const level = half ? (tri / half) * peak : 0;
+    this._frame_fill(color, level);
+  }
+
+  _frame_error() {
+    const within = this.frame % ERROR_FRAMES_PER_FLASH;
+    if (within < ERROR_FRAMES_PER_FLASH / 2) this._frame_fill(C.RED, LEVEL.error);
+    else this._frame_fill(C.OFF, 1.0);
+  }
+
+  _scale(color, level) {
+    let f = level * BRIGHTNESS;
+    if (f < 0) f = 0;
+    if (f > BRIGHTNESS) f = BRIGHTNESS;
+    return [
+      Math.floor(color[0] * f),
+      Math.floor(color[1] * f),
+      Math.floor(color[2] * f),
+    ];
+  }
+
+  _color_for_state(s) {
+    if (s === "playing") return C.GREEN;
+    if (s === "loading") return C.BLUE;
+    if (s === "paused")  return C.AMBER;
+    return C.WARM_WHITE;
+  }
+
+  _level_for_state(s) {
+    if (s === "playing") return LEVEL.playing;
+    if (s === "loading") return LEVEL.loading;
+    if (s === "paused")  return LEVEL.paused;
+    if (s === "standby") return LEVEL.standby;
+    return LEVEL.idle;
+  }
+
+  _write() {
+    // The Pico's _scale already clamps to BRIGHTNESS (max channel value ~64).
+    // Apply a display gain so dim values are still readable on screen without
+    // distorting the relative brightness between states.
+    const displayGain = 3.2;
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const [r, g, b] = this.colors[i];
+      const lit = (r | g | b) > 0;
+      if (!lit) {
+        this.pixels[i].setAttribute("fill", "#0f0f11");
+        this.pixels[i].removeAttribute("filter");
+      } else {
+        const rr = Math.min(255, Math.round(r * displayGain));
+        const gg = Math.min(255, Math.round(g * displayGain));
+        const bb = Math.min(255, Math.round(b * displayGain));
+        this.pixels[i].setAttribute("fill", `rgb(${rr},${gg},${bb})`);
+        this.pixels[i].setAttribute("filter", "url(#glow)");
+      }
+    }
+  }
+}
+
+// --- wire UI -----------------------------------------------------------------
+
+const fb = new Feedback(document.getElementById("ring"));
+const currentEl = document.getElementById("current");
+
+function refreshCurrent() {
+  if (fb.diag_mode) {
+    const suffix = fb.diag_leg ? ` (${fb.diag_leg})` : "";
+    currentEl.textContent = `diag: ${fb.diag_mode}${suffix}`;
+  } else if (fb.transient) {
+    currentEl.textContent = `${fb.transient} → reverts to ${fb.revert_to}`;
+  } else {
+    currentEl.textContent = `state: ${fb.current_state}`;
+  }
+
+  // Highlight the active sustained-state button.
+  document.querySelectorAll("button[data-state]").forEach(b => {
+    const isSustained = SUSTAINED.includes(b.dataset.state);
+    const active = isSustained && !fb.diag_mode && !fb.transient
+                   && fb.current_state === b.dataset.state;
+    b.classList.toggle("active", active);
+  });
+  document.querySelectorAll("button[data-diag]").forEach(b => {
+    const key = b.dataset.diag;
+    let active = false;
+    if (fb.diag_mode === key) active = true;
+    if (key === "net_error_wifi"   && fb.diag_mode === "net_error" && fb.diag_leg === "wifi")   active = true;
+    if (key === "net_error_broker" && fb.diag_mode === "net_error" && fb.diag_leg === "broker") active = true;
+    b.classList.toggle("active", active);
+  });
+}
+
+document.querySelectorAll("button[data-state]").forEach(b => {
+  b.addEventListener("click", () => { fb.set_state(b.dataset.state); refreshCurrent(); });
+});
+document.querySelectorAll("button[data-diag]").forEach(b => {
+  b.addEventListener("click", () => {
+    const v = b.dataset.diag;
+    if (v === "net_error_wifi")        fb.set_diag("net_error", "wifi");
+    else if (v === "net_error_broker") fb.set_diag("net_error", "broker");
+    else                               fb.set_diag(v);
+    refreshCurrent();
+  });
+});
+document.querySelectorAll("button[data-util]").forEach(b => {
+  b.addEventListener("click", () => {
+    if (b.dataset.util === "off")            fb.off();
+    if (b.dataset.util === "boot-flourish")  fb.boot_flourish();
+    refreshCurrent();
+  });
+});
+document.querySelectorAll("button[data-cue]").forEach(b => {
+  b.addEventListener("click", () => buzzer.play(CUES[b.dataset.cue]));
+});
+
+// --- playground: notes / tones / jingles ------------------------------------
+
+// Equal-tempered frequencies (Hz, rounded). R = rest.
+const N = {
+  R: 0,
+  C3: 131,  D3: 147, Eb3: 156, E3: 165, F3: 175, Fs3: 185, G3: 196, Gs3: 208, A3: 220, Bb3: 233, B3: 247,
+  C4: 262,  Cs4: 277, D4: 294, Eb4: 311, E4: 330, F4: 349, Fs4: 370, G4: 392, Gs4: 415, A4: 440, Bb4: 466, B4: 494,
+  C5: 523,  Cs5: 554, D5: 587, Eb5: 622, E5: 659, F5: 698, Fs5: 740, G5: 784, Gs5: 831, A5: 880, Bb5: 932, B5: 988,
+  C6: 1047, Cs6: 1109, D6: 1175, Eb6: 1245, E6: 1319, F6: 1397, Fs6: 1480, G6: 1568, A6: 1760, B6: 1976,
+  C7: 2093, D7: 2349, E7: 2637, G7: 3136,
+};
+
+// Single-shot tone cues. Each is an array of [freq_hz, duration_ms] pairs
+// (the same shape buzzer.play() already understands).
+const TONES = {
+  blip:      [[N.C6,  60]],
+  boop:      [[N.A3,  90]],
+  ding:      [[N.E6,  260]],
+  ping:      [[N.A6,  70]],
+  thud:      [[N.E3, 140]],
+  click:     [[N.C7,  20]],
+  pop:       [[N.G5,  30]],
+
+  chirpUp:   Array.from({length: 8},  (_, i) => [400 + i * 250, 25]),
+  chirpDown: Array.from({length: 8},  (_, i) => [2400 - i * 250, 25]),
+  swoop:     Array.from({length: 14}, (_, i) => [2200 - i * 130, 35]),
+  whistle:   Array.from({length: 10}, (_, i) => [600 + i * 220, 45]),
+  laser:     Array.from({length: 12}, (_, i) => [N.E7 - i * 180, 28]),
+  ufo:       (() => {
+                const o = [];
+                for (let i = 0; i < 24; i++) o.push([700 + Math.round(Math.sin(i / 3) * 400), 35]);
+                return o;
+             })(),
+
+  buzz:      [[N.G3, 420]],
+  siren:     [[N.E5, 220], [N.A4, 220], [N.E5, 220], [N.A4, 220], [N.E5, 220]],
+  phaser:    [[N.G6, 55], [N.E6, 55], [N.G6, 55], [N.E6, 55], [N.G6, 55], [N.E6, 55]],
+  alarm:     [[N.C6, 180], [N.R, 80], [N.C6, 180], [N.R, 80], [N.C6, 180]],
+  r2d2:      [[N.E6, 50], [N.G6, 80], [N.E6, 40], [N.C7, 110], [N.B5, 60], [N.E6, 90]],
+
+  riseTriad: [[N.C5, 120], [N.E5, 120], [N.G5, 220]],
+  fallTriad: [[N.G5, 120], [N.E5, 120], [N.C5, 220]],
+  majorArp:  [[N.C5, 110], [N.E5, 110], [N.G5, 110], [N.C6, 240]],
+  minorArp:  [[N.A4, 110], [N.C5, 110], [N.E5, 110], [N.A5, 240]],
+  fifth:     [[N.A4, 160], [N.E5, 260]],
+  octave:    [[N.C5, 160], [N.C6, 260]],
+};
+
+// Movie / cartoon / classic jingles. Single-voice, square-wave friendly.
+const JINGLES = {
+  mario_coin:  [[N.B5, 70], [N.E6, 600]],
+  mario_1up:   [[N.E6, 125], [N.G6, 125], [N.E7, 125], [N.C7, 125], [N.D7, 125], [N.G7, 250]],
+  mario_powerup: [
+    [N.G4,  60], [N.C5, 60], [N.E5, 60], [N.G5, 60], [N.C6, 60], [N.E6, 60],
+    [N.G6, 220], [N.E6, 60], [N.G6, 60], [N.A6, 220],
+  ],
+  mario_theme: [
+    [N.E5, 130], [N.E5, 130], [N.R, 130], [N.E5, 130], [N.R, 130],
+    [N.C5, 130], [N.E5, 130], [N.R, 130], [N.G5, 260], [N.R, 260], [N.G4, 260],
+  ],
+  mario_death: [
+    [N.C5, 100], [N.R, 50], [N.C5, 100], [N.R, 50], [N.C5, 100], [N.R, 200],
+    [N.C5, 150], [N.D5, 150], [N.E5, 150], [N.C5, 100], [N.R, 50],
+    [N.E5, 100], [N.R, 50], [N.G5, 100], [N.R, 200], [N.G4, 400],
+  ],
+  zelda_secret: [
+    [N.G4, 200], [N.Fs4, 200], [N.Eb4, 200], [N.A3, 200],
+    [N.Gs3, 200], [N.E4, 200], [N.Gs4, 200], [N.C5, 700],
+  ],
+  tetris: [
+    [N.E5, 200], [N.B4, 100], [N.C5, 100], [N.D5, 200], [N.C5, 100], [N.B4, 100],
+    [N.A4, 200], [N.A4, 100], [N.C5, 100], [N.E5, 200], [N.D5, 100], [N.C5, 100],
+    [N.B4, 300], [N.C5, 100], [N.D5, 200], [N.E5, 200], [N.C5, 200], [N.A4, 400],
+  ],
+  pacman: [
+    [N.B4, 80], [N.B5, 80], [N.Fs5, 80], [N.Eb5, 80], [N.B5, 50], [N.Fs5, 80], [N.Eb5, 180],
+    [N.C5, 80], [N.C6, 80], [N.G5, 80], [N.E5, 80], [N.C6, 50], [N.G5, 80], [N.E5, 180],
+  ],
+  pokemon_heal: [[N.D5, 140], [N.Fs5, 140], [N.A5, 140], [N.D6, 600]],
+  star_wars: [
+    [N.D5, 250], [N.D5, 250], [N.D5, 250],
+    [N.G5, 700], [N.D6, 700],
+    [N.C6, 100], [N.B5, 100], [N.A5, 100], [N.G6, 700], [N.D6, 350],
+    [N.C6, 100], [N.B5, 100], [N.C6, 100], [N.A5, 600],
+  ],
+  imperial: [
+    [N.G4, 360], [N.G4, 360], [N.G4, 360],
+    [N.Eb4, 260], [N.R, 40], [N.Bb4, 100],
+    [N.G4, 360], [N.Eb4, 260], [N.R, 40], [N.Bb4, 100], [N.G4, 700],
+  ],
+  indiana: [
+    [N.E4, 250], [N.R, 50], [N.F4, 120], [N.G4, 360], [N.R, 60], [N.C5, 700], [N.R, 100],
+    [N.D4, 250], [N.R, 50], [N.E4, 120], [N.F4, 800],
+  ],
+  beethoven_5th: [
+    [N.G4, 160], [N.R, 40], [N.G4, 160], [N.R, 40], [N.G4, 160], [N.Eb5, 700], [N.R, 200],
+    [N.F4, 160], [N.R, 40], [N.F4, 160], [N.R, 40], [N.F4, 160], [N.D5, 700],
+  ],
+  twinkle: [
+    [N.C5, 400], [N.C5, 400], [N.G5, 400], [N.G5, 400],
+    [N.A5, 400], [N.A5, 400], [N.G5, 800],
+    [N.F5, 400], [N.F5, 400], [N.E5, 400], [N.E5, 400],
+    [N.D5, 400], [N.D5, 400], [N.C5, 800],
+  ],
+  happy_birthday: [
+    [N.C5, 220], [N.C5, 220], [N.D5, 440], [N.C5, 440],
+    [N.F5, 440], [N.E5, 900],
+  ],
+  shave_haircut: [
+    [N.C5, 220], [N.G4, 150], [N.G4, 150], [N.A4, 220], [N.G4, 440],
+    [N.R, 120], [N.B4, 220], [N.C5, 500],
+  ],
+  ghostbusters: [
+    [N.F4, 220], [N.G4, 220], [N.F4, 220], [N.C4, 220], [N.R, 80],
+    [N.F4, 220], [N.G4, 220], [N.F4, 220], [N.C4, 360],
+  ],
+  game_over: [
+    [N.C5, 320], [N.G4, 320], [N.E4, 320], [N.C4, 700],
+  ],
+  level_up: [
+    [N.C5, 100], [N.E5, 100], [N.G5, 100], [N.C6, 320],
+  ],
+  fanfare: [
+    [N.C5, 130], [N.C5, 130], [N.C5, 130], [N.C5, 220],
+    [N.E5, 220], [N.D5, 130], [N.D5, 130], [N.D5, 220], [N.F5, 500],
+  ],
+  jeopardy: [
+    [N.C5, 230], [N.F5, 230], [N.C5, 230], [N.F4, 230],
+    [N.C5, 230], [N.F5, 230], [N.C5, 500],
+  ],
+  close_encounters: [
+    [N.D5, 280], [N.E5, 280], [N.C5, 280], [N.C4, 280], [N.G4, 700],
+  ],
+};
+
+// --- LED pattern library + sandbox ------------------------------------------
+
+let activeAnimColor = [255, 255, 255]; // pattern library color
+let activeBrush     = [255, 0, 0];     // sandbox brush
+
+const playground = {
+  handle: null,
+  frame: 0,
+  speedMs: 40,
+  fn: null,
+  name: null,
+
+  start(name, speedMs, fn) {
+    this.stop();
+    this.name = name;
+    this.speedMs = speedMs;
+    this.fn = fn;
+    this.frame = 0;
+    fb.frozen = true;
+    sandbox.deactivate(); // patterns take over
+    const tick = () => {
+      for (let i = 0; i < NUM_PIXELS; i++) fb.colors[i] = C.OFF;
+      this.fn(this.frame);
+      fb._write();
+      this.frame++;
+    };
+    tick(); // immediate first paint
+    this.handle = setInterval(tick, this.speedMs);
+  },
+
+  stop() {
+    if (this.handle) { clearInterval(this.handle); this.handle = null; }
+    this.name = null;
+    this.fn = null;
+  },
+
+  exit() {
+    this.stop();
+    fb.frozen = false;
+    // hand control back: re-render whatever sustained state was active
+    fb.last_frame = performance.now() - 1000;
+  },
+};
+
+function wheelRGB(pos) {
+  pos = ((pos % 256) + 256) % 256;
+  if (pos < 85)  return [255 - pos * 3, pos * 3, 0];
+  if (pos < 170) { pos -= 85;  return [0, 255 - pos * 3, pos * 3]; }
+  pos -= 170;     return [pos * 3, 0, 255 - pos * 3];
+}
+
+// All patterns: write into fb.colors[] using fb._scale(rgb, level) so the
+// safety-cap brightness matches the rest of the emulator (and the real ring).
+const PATTERNS = {
+  solid: (f) => {
+    const c = fb._scale(activeAnimColor, 0.9);
+    for (let i = 0; i < NUM_PIXELS; i++) fb.colors[i] = c;
+  },
+  wipe: (f) => {
+    const cyc = NUM_PIXELS * 2;
+    const phase = f % cyc;
+    const lit = fb._scale(activeAnimColor, 0.9);
+    if (phase < NUM_PIXELS) {
+      for (let i = 0; i <= phase; i++) fb.colors[i] = lit;
+    } else {
+      const off = phase - NUM_PIXELS;
+      for (let i = off + 1; i < NUM_PIXELS; i++) fb.colors[i] = lit;
+    }
+  },
+  comet: (f) => {
+    const tail = 7;
+    for (let t = 0; t < tail; t++) {
+      const idx = ((f - t) % NUM_PIXELS + NUM_PIXELS) % NUM_PIXELS;
+      fb.colors[idx] = fb._scale(activeAnimColor, (tail - t) / tail);
+    }
+  },
+  chase: (f) => {
+    const offset = f % 3;
+    const lit = fb._scale(activeAnimColor, 0.9);
+    for (let i = 0; i < NUM_PIXELS; i++) if (i % 3 === offset) fb.colors[i] = lit;
+  },
+  breathe: (f) => {
+    const period = 60, half = 30;
+    const phase = f % period;
+    const tri = phase <= half ? phase : (period - phase);
+    const c = fb._scale(activeAnimColor, tri / half);
+    for (let i = 0; i < NUM_PIXELS; i++) fb.colors[i] = c;
+  },
+  pulse: (f) => {
+    const period = 26;
+    const level = (Math.sin((f / period) * Math.PI * 2) + 1) / 2;
+    const c = fb._scale(activeAnimColor, level);
+    for (let i = 0; i < NUM_PIXELS; i++) fb.colors[i] = c;
+  },
+  blink: (f) => {
+    if (f % 12 < 6) {
+      const c = fb._scale(activeAnimColor, 0.9);
+      for (let i = 0; i < NUM_PIXELS; i++) fb.colors[i] = c;
+    }
+  },
+  scanner: (f) => {
+    const len = NUM_PIXELS, period = len * 2 - 2;
+    const phase = f % period;
+    const pos = phase < len ? phase : period - phase;
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const d = Math.abs(i - pos);
+      if (d < 3) fb.colors[i] = fb._scale(activeAnimColor, (3 - d) / 3);
+    }
+  },
+  pinwheel: (f) => {
+    const offset = f % NUM_PIXELS;
+    const lit = fb._scale(activeAnimColor, 0.9);
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const j = (i + offset) % NUM_PIXELS;
+      if (Math.floor(j / (NUM_PIXELS / 4)) % 2 === 0) fb.colors[i] = lit;
+    }
+  },
+  gradient: (f) => {
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const angle = ((i / NUM_PIXELS) - f / 80) * Math.PI * 2;
+      const level = (Math.sin(angle) + 1) / 2;
+      fb.colors[i] = fb._scale(activeAnimColor, level);
+    }
+  },
+  running: (f) => {
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const v = (Math.sin((i - f / 3) * 0.7) + 1) / 2;
+      fb.colors[i] = fb._scale(activeAnimColor, v * v);
+    }
+  },
+  radar: (f) => {
+    const head = f % NUM_PIXELS;
+    const tail = 12;
+    for (let t = 0; t < tail; t++) {
+      const idx = ((head - t) % NUM_PIXELS + NUM_PIXELS) % NUM_PIXELS;
+      fb.colors[idx] = fb._scale(activeAnimColor, (tail - t) / tail * 0.9);
+    }
+  },
+  bounce: (f) => {
+    const period = NUM_PIXELS * 2 - 2;
+    const phase = f % period;
+    const pos = phase < NUM_PIXELS ? phase : period - phase;
+    fb.colors[pos] = fb._scale(activeAnimColor, 0.9);
+  },
+  rainbow: (f) => {
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const hue = (i * 256 / NUM_PIXELS + f * 4) & 0xFF;
+      fb.colors[i] = fb._scale(wheelRGB(hue), 0.9);
+    }
+  },
+  rainbowChase: (f) => {
+    const offset = f % 3;
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      if (i % 3 === offset) {
+        const hue = (i * 256 / NUM_PIXELS + f * 6) & 0xFF;
+        fb.colors[i] = fb._scale(wheelRGB(hue), 0.9);
+      }
+    }
+  },
+  twinkle: (f) => {
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      if (Math.random() < 0.2) fb.colors[i] = fb._scale(activeAnimColor, Math.random() * 0.9 + 0.1);
+    }
+  },
+  fire: (f) => {
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const heat = 0.5 + Math.random() * 0.5;
+      const r = Math.floor(255 * heat);
+      const g = Math.floor(80 * heat * Math.random());
+      const b = 0;
+      fb.colors[i] = fb._scale([r, g, b], 0.9);
+    }
+  },
+  police: (f) => {
+    const phase = f % 8;
+    const half = NUM_PIXELS / 2;
+    const red  = phase < 4 && phase % 2 === 0 ? fb._scale([255, 0, 0], 0.9) : C.OFF;
+    const blue = phase >= 4 && phase % 2 === 0 ? fb._scale([0, 60, 255], 0.9) : C.OFF;
+    for (let i = 0; i < NUM_PIXELS; i++) fb.colors[i] = i < half ? red : blue;
+  },
+  confetti: (f) => {
+    // soft fade then sprinkle
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const [r, g, b] = fb.colors[i];
+      fb.colors[i] = [Math.floor(r * 0.78), Math.floor(g * 0.78), Math.floor(b * 0.78)];
+    }
+    if (Math.random() < 0.55) {
+      const i = Math.floor(Math.random() * NUM_PIXELS);
+      fb.colors[i] = fb._scale(wheelRGB(Math.floor(Math.random() * 256)), 0.9);
+    }
+  },
+  meteor: (f) => {
+    // single bright head, long fade tail; resets every NUM_PIXELS+tail frames
+    const tail = 10, cyc = NUM_PIXELS + tail;
+    const head = f % cyc;
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const [r, g, b] = fb.colors[i];
+      fb.colors[i] = [Math.floor(r * 0.7), Math.floor(g * 0.7), Math.floor(b * 0.7)];
+    }
+    if (head < NUM_PIXELS) {
+      fb.colors[head] = fb._scale(activeAnimColor, 1.0);
+    }
+  },
+  larson: (f) => {
+    // Cylon eye: 3-wide block with a faded trail, bounces side to side
+    const period = NUM_PIXELS * 2 - 2;
+    const phase = f % period;
+    const pos = phase < NUM_PIXELS ? phase : period - phase;
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const d = Math.abs(i - pos);
+      if (d <= 4) fb.colors[i] = fb._scale(activeAnimColor, Math.max(0, 1 - d * 0.28));
+    }
+  },
+};
+
+// --- sandbox (per-pixel paint + frame animation) ----------------------------
+
+const sandbox = {
+  pixels: new Array(NUM_PIXELS).fill(null).map(() => [0, 0, 0]),
+  frames: [],
+  active: false,
+  animHandle: null,
+  animSpeedMs: 220,
+  animIdx: 0,
+
+  activate() {
+    if (this.active) return;
+    playground.stop();
+    fb.frozen = true;
+    this.active = true;
+    this.render();
+  },
+
+  deactivate() {
+    if (this.animHandle) { clearInterval(this.animHandle); this.animHandle = null; }
+    this.active = false;
+  },
+
+  exit() {
+    this.deactivate();
+    fb.frozen = false;
+    fb.last_frame = performance.now() - 1000;
+  },
+
+  paint(i) {
+    this.activate();
+    const cur = this.pixels[i];
+    const same = cur[0] === activeBrush[0] && cur[1] === activeBrush[1] && cur[2] === activeBrush[2];
+    this.pixels[i] = same ? [0, 0, 0] : [...activeBrush];
+    this.render();
+  },
+
+  fill() {
+    this.activate();
+    for (let i = 0; i < NUM_PIXELS; i++) this.pixels[i] = [...activeBrush];
+    this.render();
+  },
+
+  clear() {
+    this.activate();
+    for (let i = 0; i < NUM_PIXELS; i++) this.pixels[i] = [0, 0, 0];
+    this.render();
+  },
+
+  random() {
+    this.activate();
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      this.pixels[i] = Math.random() < 0.5 ? wheelRGB(Math.floor(Math.random() * 256)) : [0, 0, 0];
+    }
+    this.render();
+  },
+
+  rotate() {
+    this.activate();
+    const first = this.pixels.shift();
+    this.pixels.push(first);
+    this.render();
+  },
+
+  invert() {
+    this.activate();
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const [r, g, b] = this.pixels[i];
+      const lit = (r | g | b) > 0;
+      this.pixels[i] = lit ? [0, 0, 0] : [...activeBrush];
+    }
+    this.render();
+  },
+
+  snapshot() {
+    this.frames.push(this.pixels.map(p => [...p]));
+    refreshFrameInfo();
+  },
+
+  clearFrames() {
+    if (this.animHandle) { clearInterval(this.animHandle); this.animHandle = null; }
+    this.frames = [];
+    refreshFrameInfo();
+  },
+
+  play() {
+    if (this.frames.length === 0) return;
+    this.activate();
+    if (this.animHandle) clearInterval(this.animHandle);
+    this.animIdx = 0;
+    const step = () => {
+      const frame = this.frames[this.animIdx % this.frames.length];
+      for (let i = 0; i < NUM_PIXELS; i++) this.pixels[i] = [...frame[i]];
+      this.render();
+      this.animIdx++;
+    };
+    step();
+    this.animHandle = setInterval(step, this.animSpeedMs);
+  },
+
+  stopPlay() {
+    if (this.animHandle) { clearInterval(this.animHandle); this.animHandle = null; }
+  },
+
+  render() {
+    // Show the user's painted RGB through the safety-cap scale so what they
+    // see matches what the real WS2812 ring would emit at brightness 0.25.
+    for (let i = 0; i < NUM_PIXELS; i++) {
+      const [r, g, b] = this.pixels[i];
+      fb.colors[i] = (r | g | b) ? fb._scale([r, g, b], 1.0) : C.OFF;
+    }
+    fb._write();
+  },
+
+  exportPython() {
+    const rgb = (p) => `(${p[0]}, ${p[1]}, ${p[2]})`;
+    const canvas = "FRAME = [\n    " + this.pixels.map(rgb).join(",\n    ") + ",\n]\n";
+    if (this.frames.length === 0) return canvas;
+    const fr = this.frames.map((f, i) =>
+      "    [  # frame " + i + "\n        " +
+      f.map(rgb).join(",\n        ") +
+      ",\n    ]"
+    ).join(",\n");
+    return canvas + "\nFRAMES = [\n" + fr + ",\n]\n";
+  },
+};
+
+// --- wiring: new sections ----------------------------------------------------
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.replace("#", ""), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+function rgbToCss(rgb) { return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`; }
+
+function refreshFrameInfo() {
+  const el = document.getElementById("frameInfo");
+  if (el) el.textContent = sandbox.frames.length === 1
+    ? "1 frame"
+    : `${sandbox.frames.length} frames`;
+}
+
+// Pattern color swatches
+document.querySelectorAll("button[data-anim-color]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    activeAnimColor = btn.dataset.animColor.split(",").map(Number);
+    document.querySelectorAll("button[data-anim-color]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("patternColor").value = "#" +
+      activeAnimColor.map(n => n.toString(16).padStart(2, "0")).join("");
+  });
+});
+document.getElementById("patternColor").addEventListener("input", e => {
+  activeAnimColor = hexToRgb(e.target.value);
+  document.querySelectorAll("button[data-anim-color]").forEach(b => b.classList.remove("active"));
+});
+
+// Pattern buttons
+const PATTERN_SPEED = { solid: 120, blink: 80, breathe: 30, pulse: 32, twinkle: 70,
+                        fire: 70, police: 110, confetti: 60, rainbow: 30, rainbowChase: 50,
+                        gradient: 35, running: 30, scanner: 35, larson: 35, bounce: 35,
+                        wipe: 45, comet: 35, chase: 90, pinwheel: 60, radar: 40, meteor: 35 };
+document.querySelectorAll("button[data-pattern]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const name = btn.dataset.pattern;
+    const fn = PATTERNS[name];
+    if (!fn) return;
+    playground.start(name, PATTERN_SPEED[name] || 50, fn);
+    currentEl.textContent = `pattern: ${name}`;
+  });
+});
+
+// Sandbox brush swatches
+document.querySelectorAll("button[data-brush]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    activeBrush = btn.dataset.brush.split(",").map(Number);
+    document.querySelectorAll("button[data-brush]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const css = rgbToCss(activeBrush);
+    const dot = document.getElementById("brushCurrent");
+    dot.style.background = css;
+    dot.style.color = css;
+    document.getElementById("customBrush").value =
+      "#" + activeBrush.map(n => n.toString(16).padStart(2, "0")).join("");
+  });
+});
+document.getElementById("customBrush").addEventListener("input", e => {
+  activeBrush = hexToRgb(e.target.value);
+  document.querySelectorAll("button[data-brush]").forEach(b => b.classList.remove("active"));
+  const css = rgbToCss(activeBrush);
+  const dot = document.getElementById("brushCurrent");
+  dot.style.background = css;
+  dot.style.color = css;
+});
+
+// Sandbox actions
+document.querySelectorAll("button[data-sandbox]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const action = btn.dataset.sandbox;
+    if (action === "fill")        sandbox.fill();
+    if (action === "clear")       sandbox.clear();
+    if (action === "random")      sandbox.random();
+    if (action === "rotate")      sandbox.rotate();
+    if (action === "invert")      sandbox.invert();
+    if (action === "snapshot")    sandbox.snapshot();
+    if (action === "play")        sandbox.play();
+    if (action === "stop")        sandbox.stopPlay();
+    if (action === "clearframes") sandbox.clearFrames();
+    if (action === "export") {
+      const text = sandbox.exportPython();
+      const pane = document.getElementById("exportPane");
+      pane.textContent = text;
+      pane.style.display = "block";
+      const status = document.getElementById("exportStatus");
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text)
+          .then(() => { status.textContent = "copied to clipboard"; })
+          .catch(() => { status.textContent = "(clipboard blocked — copy from pane below)"; });
+      } else {
+        status.textContent = "(copy from pane below)";
+      }
+    }
+  });
+});
+
+// Click a ring pixel to paint
+document.getElementById("ring").addEventListener("click", e => {
+  const t = e.target;
+  if (t.tagName !== "circle") return;
+  const idx = parseInt(t.getAttribute("data-pixel-index"), 10);
+  if (Number.isInteger(idx)) sandbox.paint(idx);
+});
+
+// Frame-speed slider
+const frameSpeed = document.getElementById("frameSpeed");
+const frameSpeedLabel = document.getElementById("frameSpeedLabel");
+frameSpeed.addEventListener("input", () => {
+  sandbox.animSpeedMs = parseInt(frameSpeed.value, 10);
+  frameSpeedLabel.textContent = `${sandbox.animSpeedMs} ms`;
+  if (sandbox.animHandle) sandbox.play(); // restart at new speed
+});
+
+// Buzzer free tone
+const freqSlider = document.getElementById("freqSlider");
+const durSlider  = document.getElementById("durSlider");
+const freqLabel  = document.getElementById("freqLabel");
+const durLabel   = document.getElementById("durLabel");
+freqSlider.addEventListener("input", () => { freqLabel.textContent = `${freqSlider.value} Hz`; });
+durSlider.addEventListener("input",  () => { durLabel.textContent  = `${durSlider.value} ms`; });
+document.getElementById("playFreq").addEventListener("click", () => {
+  buzzer.play([[parseInt(freqSlider.value, 10), parseInt(durSlider.value, 10)]]);
+});
+
+// Tone presets
+document.querySelectorAll("button[data-tone]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const cue = TONES[btn.dataset.tone];
+    if (cue) buzzer.play(cue);
+  });
+});
+
+// Jingles
+document.querySelectorAll("button[data-jingle]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const cue = JINGLES[btn.dataset.jingle];
+    if (cue) buzzer.play(cue);
+  });
+});
+
+// --- exit playground when any "normal" emulator button is clicked ------------
+
+function exitPlayground() {
+  playground.exit();
+  sandbox.exit();
+}
+document.querySelectorAll("button[data-state], button[data-diag], button[data-util], button[data-cue]")
+  .forEach(b => b.addEventListener("click", exitPlayground, true)); // capture phase: run before existing handlers
+
+// Animation loop and a periodic refresh so the "current" line tracks transients.
+function loop() { fb.tick(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+setInterval(refreshCurrent, 150);
+refreshCurrent();
+refreshFrameInfo();
+</script>
+</body>
+</html>

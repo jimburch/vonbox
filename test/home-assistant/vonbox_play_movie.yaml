@@ -48,11 +48,11 @@ variables:
   #   disney_plus  -> full https://www.disneyplus.com/play/<id> URL
   uid_to_source:
     "045AED5ECD2A81": "plex"          # The Super Mario Galaxy Movie (NTAG inside the Mario Blu-ray box)
-    "044E4250CE2A81": "disney_plus"   # Frozen (2013)
+    "044E4250CE2A81": "plex"          # Frozen (2013)
     "0416C63D9E6180": "plex"          # Sonic the Hedgehog 3
   uid_to_play_id:
     "045AED5ECD2A81": "9217"
-    "044E4250CE2A81": "https://www.disneyplus.com/play/04c97b72-504b-47f2-9c6f-fe13d9aea82f"
+    "044E4250CE2A81": "9340"
     "0416C63D9E6180": "6375"
   uid_to_title:
     "045AED5ECD2A81": "The Super Mario Galaxy Movie"
@@ -253,9 +253,9 @@ actions:
             continue_on_timeout: true
 
           # Step 2: cold-launch retry. If the first fire didn't surface the
-          # live Frozen session within 12s, Disney+ swallowed the URL on
-          # cold launch -- by now the app is foregrounded (warm) so re-fire
-          # and wait again.
+          # live session within 12s, Disney+ swallowed the URL on cold
+          # launch -- by now the app is foregrounded (warm) so re-fire and
+          # wait again.
           - if:
               - condition: template
                 value_template: "{{ not wait.completed }}"
